@@ -62,9 +62,13 @@ const DEFAULT_SETTINGS: ReaderSettings = {
     hideIndicators: false,
     hideFurigana: false,
     disableRtl: false,
+
+    enableFocusMode: false,
+    enableReadingRuler: false,
     
     highlightColor: '#fde047', // yellow
-    customAiPrompt: ''
+    customAiPrompt: '',
+    aiModel: 'gemini-2.5-flash'
 };
 
 export const saveGlobalSettings = (settings: ReaderSettings) => {

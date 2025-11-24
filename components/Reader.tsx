@@ -40,6 +40,7 @@ const Reader: React.FC<ReaderProps> = ({ book, settings, onSelection, onSettings
   const renditionRef = useRef<Rendition | null>(null);
   const bookRef = useRef<any>(null); 
   const selectionTimeRef = useRef<number>(0);
+  const rulerRef = useRef<HTMLDivElement>(null);
   
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -93,6 +94,20 @@ const Reader: React.FC<ReaderProps> = ({ book, settings, onSelection, onSettings
 
   const colors = getThemeColors();
 
+  // Mouse Move Handler for Ruler (Window Level)
+  useEffect(() => {
+      if (!settings.enableReadingRuler) return;
+      
+      const handleMouseMove = (e: MouseEvent) => {
+          if (rulerRef.current) {
+              // Direct DOM update for performance
+              rulerRef.current.style.top = `${e.clientY - 16}px`;
+          }
+      };
+      window.addEventListener('mousemove', handleMouseMove);
+      return () => window.removeEventListener('mousemove', handleMouseMove);
+  }, [settings.enableReadingRuler]);
+
   const applyStyles = useCallback((rendition: Rendition, currentSettings: ReaderSettings) => {
     const themeColors = getThemeColors();
     const font = getFontFamily();
@@ -122,7 +137,9 @@ const Reader: React.FC<ReaderProps> = ({ book, settings, onSelection, onSettings
         'line-height': 'inherit !important',
         'color': 'inherit !important',
         'margin-bottom': `${currentSettings.paragraphSpacing}px !important`,
-        'margin-top': '0 !important'
+        'margin-top': '0 !important',
+        // Base transition for focus mode
+        'transition': 'opacity 0.3s ease, color 0.3s ease !important',
       },
       '::selection': {
         'background': `${currentSettings.highlightColor} !important`,
@@ -150,6 +167,17 @@ const Reader: React.FC<ReaderProps> = ({ book, settings, onSelection, onSettings
     if (currentSettings.disableRtl) {
         rules['html'] = { 'direction': 'ltr !important' };
         rules['body'] = { 'direction': 'ltr !important' };
+    }
+
+    // Focus Mode (CSS Injection)
+    if (currentSettings.enableFocusMode) {
+        // When body is hovered (active), dim all P
+        rules['body:hover p'] = { 'opacity': '0.3' };
+        // But keep the hovered P bright
+        rules['body p:hover'] = { 'opacity': '1 !important' };
+    } else {
+        // Reset if disabled
+        rules['body:hover p'] = { 'opacity': '1' };
     }
 
     rendition.themes.register('custom', rules);
@@ -231,9 +259,7 @@ const Reader: React.FC<ReaderProps> = ({ book, settings, onSelection, onSettings
         if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
             e.preventDefault();
             setIsSearchBarOpen(true);
-            // Small delay to ensure modal is mounted
             setTimeout(() => searchInputRef.current?.focus(), 50);
-            // If text is selected, pre-fill it
             const selection = window.getSelection()?.toString();
             if(selection) setSearchQuery(selection);
         }
@@ -280,7 +306,7 @@ const Reader: React.FC<ReaderProps> = ({ book, settings, onSelection, onSettings
   const handleOpenAnnotationModal = () => {
     if (menu.cfiRange && menu.text) {
       setPendingAnnotation({ cfi: menu.cfiRange, text: menu.text });
-      setEditingAnnotation(null); // Clear editing state
+      setEditingAnnotation(null);
       setIsAnnotationModalOpen(true);
       setMenu(prev => ({ ...prev, visible: false }));
     }
@@ -289,13 +315,11 @@ const Reader: React.FC<ReaderProps> = ({ book, settings, onSelection, onSettings
   const handleSaveAnnotation = (data: { note: string; color: string; style: 'highlight' | 'underline'; tags: string[] }) => {
     if (!renditionRef.current) return;
 
-    // Determine target CFI (either new or editing)
     const cfi = editingAnnotation ? editingAnnotation.cfiRange : pendingAnnotation?.cfi;
     const textContext = editingAnnotation ? editingAnnotation.text : pendingAnnotation?.text;
 
     if (!cfi || !textContext) return;
 
-    // Remove old visual if editing
     if (editingAnnotation) {
         try {
             renditionRef.current.annotations.remove(cfi, 'highlight');
@@ -303,12 +327,9 @@ const Reader: React.FC<ReaderProps> = ({ book, settings, onSelection, onSettings
         } catch(e) {}
     }
 
-    // Add new visual
     const prefix = data.style === 'highlight' ? 'hl' : 'ul';
     const className = `${prefix}-${data.color}`; 
     try {
-        // We pass the CFI as the 'data' so we can look it up later on click
-        // Critical: The data object must be the third argument
         renditionRef.current.annotations.add(data.style, cfi, { cfiRange: cfi }, undefined, className);
     } catch(e) {
         console.warn("Failed to add visual annotation", e);
@@ -326,7 +347,6 @@ const Reader: React.FC<ReaderProps> = ({ book, settings, onSelection, onSettings
     };
 
     setAnnotations(prev => {
-        // If editing, replace. If new, push.
         const updated = editingAnnotation 
             ? prev.map(a => a.cfiRange === cfi ? newAnnotation : a)
             : [...prev, newAnnotation];
@@ -401,7 +421,6 @@ const Reader: React.FC<ReaderProps> = ({ book, settings, onSelection, onSettings
       if (!bookRef.current) return [];
       if (!query || query.length < 2) return [];
 
-      // Re-implement sidebar search using item.load() manually for robustness
       const results: any[] = [];
       const spine = bookRef.current.spine;
       const spineLength = spine.length;
@@ -426,7 +445,6 @@ const Reader: React.FC<ReaderProps> = ({ book, settings, onSelection, onSettings
                       const end = Math.min(cleanText.length, index + query.length + 30);
                       const excerpt = cleanText.substring(start, end);
                       
-                      // Approximation for Sidebar navigation (Sidebar doesn't highlight specific range, just jumps to chapter)
                       results.push({
                           cfi: item.href, 
                           excerpt: excerpt,
@@ -437,7 +455,6 @@ const Reader: React.FC<ReaderProps> = ({ book, settings, onSelection, onSettings
                       startIndex = index + query.length;
                       index = lowerText.indexOf(lowerQuery, startIndex);
                       
-                      // Cap results per chapter for performance if needed, but user wants "all"
                       if (results.length > 500) break; 
                   }
               }
@@ -446,7 +463,6 @@ const Reader: React.FC<ReaderProps> = ({ book, settings, onSelection, onSettings
       return results;
   };
   
-  // Floating Search Bar Logic
   const handleInteractiveSearch = async (e?: React.FormEvent) => {
       if (e) e.preventDefault();
       if (!searchQuery.trim()) return;
@@ -454,7 +470,6 @@ const Reader: React.FC<ReaderProps> = ({ book, settings, onSelection, onSettings
       setIsSearching(true);
       setCurrentMatchIndex(-1);
       
-      // Clear old search highlights
       if (renditionRef.current) {
           try {
              const annotations = renditionRef.current.annotations as any;
@@ -470,7 +485,6 @@ const Reader: React.FC<ReaderProps> = ({ book, settings, onSelection, onSettings
       }
 
       try {
-          // Use epub.js internal `find` which returns CFIs directly for highlighting
           const results = await Promise.all(
               // @ts-ignore
               bookRef.current.spine.spineItems.map(item => 
@@ -488,12 +502,9 @@ const Reader: React.FC<ReaderProps> = ({ book, settings, onSelection, onSettings
           setSearchMatches(flatResults);
           
           if (flatResults.length > 0) {
-              // Highlight ALL matches
               flatResults.forEach((res: any) => {
                  renditionRef.current?.annotations.add('highlight', res.cfi, {}, undefined, 'search-result');
               });
-              
-              // Jump to first
               nextSearchMatch(0, flatResults);
           }
           
@@ -509,11 +520,9 @@ const Reader: React.FC<ReaderProps> = ({ book, settings, onSelection, onSettings
           e.preventDefault();
           e.shiftKey ? prevSearchMatch() : nextSearchMatch();
       } else if (e.key === 'ArrowDown' || e.key === 'ArrowRight') {
-          // Navigate Next
           e.preventDefault();
           nextSearchMatch();
       } else if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') {
-          // Navigate Prev
           e.preventDefault();
           prevSearchMatch();
       }
@@ -524,7 +533,7 @@ const Reader: React.FC<ReaderProps> = ({ book, settings, onSelection, onSettings
       if (matches.length === 0) return;
       
       let nextIndex = indexOverride !== undefined ? indexOverride : currentMatchIndex + 1;
-      if (nextIndex >= matches.length) nextIndex = 0; // Loop
+      if (nextIndex >= matches.length) nextIndex = 0;
       
       updateActiveSearchHighlight(nextIndex, matches);
   };
@@ -532,28 +541,23 @@ const Reader: React.FC<ReaderProps> = ({ book, settings, onSelection, onSettings
   const prevSearchMatch = () => {
       if (searchMatches.length === 0) return;
       let nextIndex = currentMatchIndex - 1;
-      if (nextIndex < 0) nextIndex = searchMatches.length - 1; // Loop
+      if (nextIndex < 0) nextIndex = searchMatches.length - 1;
       
       updateActiveSearchHighlight(nextIndex, searchMatches);
   };
 
   const updateActiveSearchHighlight = (index: number, matches: any[]) => {
-      // Remove 'active' class from old match if exists
       if (currentMatchIndex !== -1 && matches[currentMatchIndex]) {
           renditionRef.current?.annotations.remove(matches[currentMatchIndex].cfi, 'highlight');
-          // Add back as normal
           renditionRef.current?.annotations.add('highlight', matches[currentMatchIndex].cfi, {}, undefined, 'search-result');
       }
 
-      // Set new active
       const match = matches[index];
       setCurrentMatchIndex(index);
       
-      // Update visual
       renditionRef.current?.annotations.remove(match.cfi, 'highlight');
       renditionRef.current?.annotations.add('highlight', match.cfi, {}, undefined, 'search-result-active');
       
-      // Navigate
       renditionRef.current?.display(match.cfi);
   };
 
@@ -562,7 +566,6 @@ const Reader: React.FC<ReaderProps> = ({ book, settings, onSelection, onSettings
       setSearchMatches([]);
       setSearchQuery('');
       setCurrentMatchIndex(-1);
-      // Clean up visuals
        if (renditionRef.current) {
           try {
              const annotations = renditionRef.current.annotations as any;
@@ -583,7 +586,6 @@ const Reader: React.FC<ReaderProps> = ({ book, settings, onSelection, onSettings
   useEffect(() => {
     if (!book || book.type !== 'epub' || !viewerRef.current) return;
     
-    // Clean up previous
     if (renditionRef.current) {
         try { renditionRef.current.destroy(); } catch(e) {}
     }
@@ -600,7 +602,6 @@ const Reader: React.FC<ReaderProps> = ({ book, settings, onSelection, onSettings
       const epubBook = ePub(book.content as ArrayBuffer);
       bookRef.current = epubBook;
 
-      // Determine Flow
       const flowMode = settings.flow === 'scrolled' ? 'scrolled' : 'paginated';
 
       const rendition = epubBook.renderTo(viewerRef.current, {
@@ -621,6 +622,21 @@ const Reader: React.FC<ReaderProps> = ({ book, settings, onSelection, onSettings
               style.innerHTML = getAnnotationCss();
               head.appendChild(style);
           }
+          
+          // Ruler Mouse Event Listener inside iframe
+          // Fix: Handle offset for scrolling iframes by calculating rect.top + clientY
+          doc.addEventListener('mousemove', (e: MouseEvent) => {
+             const iframe = doc.defaultView?.frameElement as HTMLElement;
+             if (iframe && rulerRef.current) {
+                 const rect = iframe.getBoundingClientRect();
+                 // Adjust Y by iframe's position relative to viewport
+                 const screenY = rect.top + e.clientY;
+                 rulerRef.current.style.top = `${screenY - 16}px`;
+             } else if (rulerRef.current) {
+                 // Fallback if frameElement is inaccessible (e.g. rare cross-origin cases, though blobs usually same-origin)
+                 rulerRef.current.style.top = `${e.clientY - 16}px`;
+             }
+          });
       });
 
       const savedData = loadUserData(book.id);
@@ -646,7 +662,6 @@ const Reader: React.FC<ReaderProps> = ({ book, settings, onSelection, onSettings
         setLoading(false);
         applyStyles(rendition, settings);
         
-        // Restore annotations
         if (savedData?.annotations) {
             savedData.annotations.forEach((note: Annotation) => {
                 const prefix = note.style === 'highlight' ? 'hl' : 'ul';
@@ -672,7 +687,6 @@ const Reader: React.FC<ReaderProps> = ({ book, settings, onSelection, onSettings
         
         // --- Event Listeners ---
         
-        // 1. Text Selected
         rendition.on('selected', (cfiRange: string, contents: any) => {
           selectionTimeRef.current = Date.now();
           const selection = contents.window.getSelection();
@@ -702,11 +716,8 @@ const Reader: React.FC<ReaderProps> = ({ book, settings, onSelection, onSettings
           }
         });
 
-        // 2. Annotation Clicked (Edit Mode)
         rendition.on('markClicked', (cfiRange: string, data: any) => {
-             // Use the REF to get the latest annotations state, ignoring closure staleness
              const currentAnnotations = annotationsRef.current;
-             
              const annotation = currentAnnotations.find(a => a.cfiRange === cfiRange || (data && data.cfiRange === a.cfiRange));
              
              if (annotation) {
@@ -761,7 +772,6 @@ const Reader: React.FC<ReaderProps> = ({ book, settings, onSelection, onSettings
     };
   }, [book?.id, settings.flow]); 
 
-  // Update styles immediately when other settings change (no re-init needed)
   useEffect(() => {
     if (book?.type === 'epub' && renditionRef.current) {
        applyStyles(renditionRef.current, settings);
@@ -777,10 +787,22 @@ const Reader: React.FC<ReaderProps> = ({ book, settings, onSelection, onSettings
   if (book.type === 'txt') {
     return (
       <div 
-        className="flex-1 h-full w-full overflow-y-auto relative reader-scroll transition-colors duration-300"
+        className={`flex-1 h-full w-full overflow-y-auto relative reader-scroll transition-colors duration-300 group ${settings.enableFocusMode ? 'focus-mode-active' : ''}`}
         style={{ backgroundColor: colors.bg, color: colors.text }}
         onMouseUp={handleTxtSelection}
+        onMouseMove={(e) => {
+            if (settings.enableReadingRuler && rulerRef.current) {
+                rulerRef.current.style.top = `${e.clientY - 16}px`;
+            }
+        }}
       >
+        {settings.enableReadingRuler && (
+             <div 
+                 ref={rulerRef}
+                 className="fixed left-0 right-0 h-8 bg-yellow-400/20 pointer-events-none z-40 mix-blend-multiply border-y border-yellow-400/30"
+                 style={{ top: -100 }}
+             />
+        )}
         <div 
           className="max-w-4xl mx-auto"
           style={{ 
@@ -797,7 +819,13 @@ const Reader: React.FC<ReaderProps> = ({ book, settings, onSelection, onSettings
           }}
         >
           {(book.content as string).split('\n').map((para, idx) => (
-             <p key={idx} style={{ marginBottom: `${settings.paragraphSpacing}px` }}>{para}</p>
+             <p 
+                key={idx} 
+                style={{ marginBottom: `${settings.paragraphSpacing}px` }}
+                className="transition-opacity duration-300 ease-in-out hover:!opacity-100"
+             >
+                 {para}
+             </p>
           ))}
         </div>
         
@@ -805,6 +833,14 @@ const Reader: React.FC<ReaderProps> = ({ book, settings, onSelection, onSettings
             ::selection {
                 background: ${settings.highlightColor} !important;
                 color: black !important;
+            }
+            /* Focus Mode for TXT */
+            .focus-mode-active:hover p {
+                opacity: 0.3;
+            }
+            /* Explicitly ensure hovered paragraph is opaque */
+            .focus-mode-active:hover p:hover {
+                opacity: 1 !important;
             }
         `}</style>
         
@@ -826,7 +862,7 @@ const Reader: React.FC<ReaderProps> = ({ book, settings, onSelection, onSettings
         <div className="absolute top-4 right-4 z-20 flex items-center gap-2 p-1.5 rounded-lg bg-white/90 shadow-sm border border-slate-200/50 backdrop-blur-sm">
              <button onClick={() => onSettingsChange({...settings, fontSize: Math.max(12, settings.fontSize - 2)})} className="p-1.5 hover:bg-slate-100 rounded text-slate-600"><ZoomOut size={18} /></button>
              <span className="text-xs font-medium w-8 text-center text-slate-600">{settings.fontSize}px</span>
-             <button onClick={() => onSettingsChange({...settings, fontSize: Math.min(32, settings.fontSize + 2)})} className="p-1.5 hover:bg-slate-100 rounded text-slate-600"><ZoomIn size={18} /></button>
+             <button onClick={() => onSettingsChange({...settings, fontSize: Math.min(36, settings.fontSize + 2)})} className="p-1.5 hover:bg-slate-100 rounded text-slate-600"><ZoomIn size={18} /></button>
              <div className="w-px h-4 bg-slate-300 mx-1"></div>
              <button onClick={onToggleChat} className="p-1.5 hover:bg-blue-50 text-blue-600 rounded transition-colors" title="Open AI Chat">
                  <MessageSquare size={18} />
@@ -856,7 +892,15 @@ const Reader: React.FC<ReaderProps> = ({ book, settings, onSelection, onSettings
   return (
     <div className="flex-1 flex flex-col h-full w-full relative overflow-hidden transition-colors duration-300" style={{ backgroundColor: colors.bg }}>
       
-      {/* Fallback global styles in case iframe hook is late */}
+      {/* Reading Ruler Overlay */}
+      {settings.enableReadingRuler && (
+          <div 
+              ref={rulerRef}
+              className="fixed left-0 right-0 h-8 bg-yellow-400/20 pointer-events-none z-40 mix-blend-multiply border-y border-yellow-400/30 transition-transform duration-75 ease-linear"
+              style={{ top: -100 }}
+          />
+      )}
+
       <style>{getAnnotationCss()}</style>
 
       {/* Floating Search Bar (Ctrl+F) */}
@@ -991,7 +1035,7 @@ const Reader: React.FC<ReaderProps> = ({ book, settings, onSelection, onSettings
       <div className="absolute top-4 right-4 z-20 flex items-center gap-2 p-1.5 rounded-lg bg-white/90 shadow-sm border border-slate-200/50 backdrop-blur-sm">
          <button onClick={() => onSettingsChange({...settings, fontSize: Math.max(12, settings.fontSize - 2)})} className="p-1.5 hover:bg-slate-100 rounded text-slate-600"><ZoomOut size={18} /></button>
          <span className="text-xs font-medium w-8 text-center text-slate-600">{settings.fontSize}px</span>
-         <button onClick={() => onSettingsChange({...settings, fontSize: Math.min(32, settings.fontSize + 2)})} className="p-1.5 hover:bg-slate-100 rounded text-slate-600"><ZoomIn size={18} /></button>
+         <button onClick={() => onSettingsChange({...settings, fontSize: Math.min(36, settings.fontSize + 2)})} className="p-1.5 hover:bg-slate-100 rounded text-slate-600"><ZoomIn size={18} /></button>
          <div className="w-px h-4 bg-slate-300 mx-1"></div>
          <button onClick={onToggleChat} className="p-1.5 hover:bg-blue-50 text-blue-600 rounded transition-colors" title="Open AI Chat">
              <MessageSquare size={18} />

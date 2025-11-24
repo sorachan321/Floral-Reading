@@ -40,11 +40,16 @@ export interface ReaderSettings {
   hideFurigana: boolean; // Hide Japanese ruby text
   disableRtl: boolean;   // Force LTR
   
+  // Focus Tools
+  enableFocusMode: boolean;    // Dim inactive paragraphs
+  enableReadingRuler: boolean; // Show a reading guide line/bar
+  
   // Preferences
   highlightColor: string;   // Default browser selection color
   
   // AI
   customAiPrompt?: string;  // User defined system instruction override
+  aiModel: string;          // Selected Gemini Model ID
 }
 
 export interface ChatMessage {

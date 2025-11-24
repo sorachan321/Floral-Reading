@@ -1,11 +1,14 @@
+
 import { GoogleGenAI, GenerateContentResponse, Chat } from "@google/genai";
 
 export class GeminiService {
   private ai: GoogleGenAI;
   private chatSession: Chat | null = null;
-  private modelId = "gemini-2.5-flash";
+  private currentModelId: string = "gemini-2.5-flash";
 
   constructor() {
+    // The key is obtained from the environment variable.
+    // In a real packaged app, you might handle this differently or ensure the env is injected.
     this.ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   }
 
@@ -17,29 +20,29 @@ export class GeminiService {
     return this.ai;
   }
 
-  async startChat(systemInstruction?: string, bookContext?: string) {
+  async startChat(modelId: string, systemInstruction?: string, bookContext?: string) {
     const client = this.getClient();
+    this.currentModelId = modelId;
     
     let instruction = systemInstruction || "You are an intelligent literary assistant called Lumina. You help users understand books, analyze themes, and translate text. Be concise, helpful, and polite.";
 
     // Logic: If book context is provided, we inject it into the system instruction.
-    // Gemini 1.5+ Flash has a massive context window, handling full books easily.
     if (bookContext) {
         instruction += `\n\n=== ATTACHED BOOK CONTENT ===\nThe user is currently reading the following book. Use this text as the primary source of truth for your answers. Quote specific passages where relevant. If the user asks about the plot, characters, or themes, use this full text to provide accurate, deep analysis.\n\n${bookContext}\n\n=== END OF BOOK CONTENT ===`;
     }
 
     this.chatSession = client.chats.create({
-      model: this.modelId,
+      model: modelId,
       config: {
         systemInstruction: instruction,
       },
     });
   }
 
-  async sendMessageStream(message: string, context?: string, bookFullText?: string): Promise<AsyncIterable<GenerateContentResponse>> {
-    // If we have full book text but no session, OR if the session needs to be refreshed with new context
-    if (!this.chatSession) {
-      await this.startChat(undefined, bookFullText);
+  async sendMessageStream(message: string, context?: string, bookFullText?: string, modelId: string = "gemini-2.5-flash"): Promise<AsyncIterable<GenerateContentResponse>> {
+    // If model changed or session doesn't exist, restart chat
+    if (!this.chatSession || this.currentModelId !== modelId) {
+      await this.startChat(modelId, undefined, bookFullText);
     }
     
     let fullMessage = message;
@@ -51,7 +54,7 @@ export class GeminiService {
 
     if (!this.chatSession) {
         // Fallback initialization if something went wrong
-        await this.startChat(undefined, bookFullText);
+        await this.startChat(modelId, undefined, bookFullText);
         if (!this.chatSession) throw new Error("Failed to initialize chat session");
     }
 
@@ -60,13 +63,13 @@ export class GeminiService {
     } catch (e) {
         // If the session fails (e.g. token limit or expiration), try restarting with context
         console.warn("Session error, restarting chat...", e);
-        await this.startChat(undefined, bookFullText);
+        await this.startChat(modelId, undefined, bookFullText);
         // We can't retry the stream easily here without recursion, but throwing allows the UI to handle it
         throw e;
     }
   }
 
-  async analyzeSelection(selection: string, promptType: 'explain' | 'summarize' | 'translate'): Promise<string> {
+  async analyzeSelection(modelId: string, selection: string, promptType: 'explain' | 'summarize' | 'translate'): Promise<string> {
     const client = this.getClient();
     
     let prompt = "";
@@ -83,7 +86,7 @@ export class GeminiService {
     }
 
     const response = await client.models.generateContent({
-      model: this.modelId,
+      model: modelId,
       contents: prompt,
     });
     

@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { v4 as uuidv4 } from 'uuid';
 import ePub from 'epubjs';
 import Sidebar from './components/Sidebar';
@@ -35,7 +35,10 @@ function App() {
     hideFootnotes: false,
     hideIndicators: false,
     hideFurigana: false,
-    disableRtl: false
+    disableRtl: false,
+    enableFocusMode: false,
+    enableReadingRuler: false,
+    aiModel: 'gemini-2.5-flash' // Default model
   });
   
   // Modal State
@@ -62,10 +65,10 @@ function App() {
       setReaderSettings(savedSettings);
   }, []);
 
-  const handleSettingsChange = (newSettings: ReaderSettings) => {
+  const handleSettingsChange = useCallback((newSettings: ReaderSettings) => {
       setReaderSettings(newSettings);
       saveGlobalSettings(newSettings);
-  };
+  }, []);
 
   // --- Handlers ---
 
@@ -169,10 +172,11 @@ function App() {
         const contextText = currentSelection?.text;
         const bookContext = activeBook?.isContextEnabled ? activeBook?.extractedText || activeBook?.textContent : undefined;
         
-        // Pass the CUSTOM SYSTEM PROMPT from settings
-        await geminiService.startChat(readerSettings.customAiPrompt, bookContext);
+        // Pass the SELECTED MODEL and SYSTEM PROMPT from settings
+        // The service now handles model initialization if it changed
+        await geminiService.startChat(readerSettings.aiModel, readerSettings.customAiPrompt, bookContext);
 
-        const stream = await geminiService.sendMessageStream(text, contextText, bookContext);
+        const stream = await geminiService.sendMessageStream(text, contextText, bookContext, readerSettings.aiModel);
         
         const modelMsgId = uuidv4();
         let fullText = "";
@@ -211,7 +215,8 @@ function App() {
       setMessages(prev => [...prev, userMsg]);
 
       try {
-          const result = await geminiService.analyzeSelection(currentSelection.text, type);
+          // Pass selected model
+          const result = await geminiService.analyzeSelection(readerSettings.aiModel, currentSelection.text, type);
           const modelMsg: ChatMessage = { id: uuidv4(), role: 'model', text: result };
           setMessages(prev => [...prev, modelMsg]);
       } catch (e) {
@@ -315,6 +320,7 @@ function App() {
                     onAnalyzeSelection={handleAnalyzeSelection}
                     onEnableContext={handleEnableContext}
                     isExtractingText={isExtractingText}
+                    onClearSelection={() => setCurrentSelection(null)}
                 />
              </div>
         )}

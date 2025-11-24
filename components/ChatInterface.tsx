@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useRef } from 'react';
 import { Send, X, Sparkles, BrainCircuit, BookOpen, Loader2, Quote, Trash2, MessageSquare } from 'lucide-react';
 import { ChatMessage, Book } from '../types';
@@ -14,6 +15,7 @@ interface ChatInterfaceProps {
   onAnalyzeSelection: (type: 'explain' | 'summarize' | 'translate') => void;
   onEnableContext: () => void;
   isExtractingText: boolean;
+  onClearSelection: () => void;
 }
 
 const ChatInterface: React.FC<ChatInterfaceProps> = ({
@@ -27,7 +29,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
   currentSelection,
   onAnalyzeSelection,
   onEnableContext,
-  isExtractingText
+  isExtractingText,
+  onClearSelection
 }) => {
   const [inputText, setInputText] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -174,11 +177,17 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     <Quote size={10} />
                     <span>Reference Context</span>
                 </div>
-                <p className="text-xs text-slate-600 italic line-clamp-2 leading-relaxed">
+                <p className="text-xs text-slate-600 italic line-clamp-2 leading-relaxed pr-6">
                     "{currentSelection}"
                 </p>
-                {/* Visual indicator that this will be sent */}
-                <div className="absolute right-2 top-2 w-2 h-2 bg-amber-500 rounded-full animate-pulse"></div>
+                {/* Close Button */}
+                <button 
+                  onClick={onClearSelection}
+                  className="absolute right-1 top-1 p-1.5 text-amber-700/60 hover:text-red-600 hover:bg-red-50/50 rounded-full transition-colors"
+                  title="Remove context"
+                >
+                    <X size={12} strokeWidth={2.5} />
+                </button>
             </div>
         )}
 

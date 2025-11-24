@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect } from 'react';
-import { X, Key, Check, Type, LayoutTemplate, Sparkles, RefreshCcw, Save, ScrollText, BookOpen, AlignJustify, AlignLeft, Columns, Smartphone } from 'lucide-react';
+import { X, Key, Check, Type, LayoutTemplate, Sparkles, RefreshCcw, Save, ScrollText, BookOpen, AlignJustify, AlignLeft, Columns, Smartphone, Cpu } from 'lucide-react';
 import { ReaderSettings } from '../types';
 
 interface SettingsModalProps {
@@ -28,6 +28,12 @@ const HIGHLIGHT_COLORS = [
     { id: '#d8b4fe', label: 'Purple', value: '#d8b4fe' },
 ];
 
+// Based on provided coding guidelines
+const AI_MODELS = [
+    { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash (快速/平衡 - 默认)', desc: '响应速度极快，适合大多数阅读辅助、翻译和摘要任务。' },
+    { id: 'gemini-3-pro-preview', name: 'Gemini 3 Pro (深度推理/复杂任务)', desc: '处理复杂文学分析、隐喻解读能力更强，但响应可能稍慢。' },
+];
+
 const SettingsModal: React.FC<SettingsModalProps> = ({ 
     isOpen, 
     onClose, 
@@ -41,22 +47,28 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
   const [localSettings, setLocalSettings] = useState<ReaderSettings>(settings);
   const [saved, setSaved] = useState(false);
 
-  // Sync props to local state when opening
+  // Sync props to local state ONLY when opening the modal.
+  // We exclude 'settings' from the dependency array to prevent a feedback loop
+  // where local updates trigger parent updates which then reset local state while editing.
   useEffect(() => {
     if (isOpen) {
         setLocalSettings(settings);
         setKeyInput(apiKey);
     }
-  }, [isOpen, settings, apiKey]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen]);
 
   // Auto-save local settings changes to parent (live preview)
   useEffect(() => {
+      // Prevent feedback loop: only broadcast changes if the modal is actually open
+      if (!isOpen) return;
+
       // Debounce updates to avoid rapid re-renders
       const timer = setTimeout(() => {
           onSettingsChange(localSettings);
       }, 50);
       return () => clearTimeout(timer);
-  }, [localSettings, onSettingsChange]);
+  }, [localSettings, onSettingsChange, isOpen]);
 
   if (!isOpen) return null;
 
@@ -83,7 +95,9 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
           hideFootnotes: false,
           hideIndicators: false,
           hideFurigana: false,
-          disableRtl: false
+          disableRtl: false,
+          enableFocusMode: false,
+          enableReadingRuler: false
       }));
   };
 
@@ -265,6 +279,30 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
 
                     <div className="w-full h-px bg-slate-200"></div>
 
+                    {/* Focus Tools */}
+                    <div>
+                        <label className="block text-sm font-bold text-slate-700 mb-3 flex items-center gap-2">
+                            辅助工具 (Assistive Tools)
+                        </label>
+                        <div className="space-y-1">
+                            <CheckboxRow 
+                                label="聚光灯模式 (Focus Mode) - 高亮当前段落" 
+                                checked={localSettings.enableFocusMode} 
+                                onChange={(v) => setLocalSettings({...localSettings, enableFocusMode: v})} 
+                            />
+                            <CheckboxRow 
+                                label="虚拟阅读尺 (Reading Ruler)" 
+                                checked={localSettings.enableReadingRuler} 
+                                onChange={(v) => setLocalSettings({...localSettings, enableReadingRuler: v})} 
+                            />
+                        </div>
+                        <p className="text-xs text-slate-400 mt-1 px-8">
+                            聚光灯模式会让非当前选中的段落变暗。阅读尺会显示一个跟随鼠标的半透明横条。
+                        </p>
+                    </div>
+
+                    <div className="w-full h-px bg-slate-200"></div>
+
                     {/* Sliders */}
                     <div>
                         <SliderControl 
@@ -309,7 +347,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
 
                     <div className="w-full h-px bg-slate-200"></div>
 
-                    {/* Checkboxes */}
+                    {/* Advanced Configs */}
                     <div className="space-y-1">
                         <CheckboxRow 
                             label="MathJax (数学公式支持)" 
@@ -417,8 +455,45 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
                             className="w-full p-3 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 outline-none transition-all"
                         />
                          <p className="text-xs text-slate-500 mt-2">
-                            Lumina 使用 Google Gemini 模型。Key 仅存储在本地。
+                            API Key 仅存储在本地。
                         </p>
+                    </div>
+
+                    <div className="w-full h-px bg-slate-200"></div>
+
+                    {/* Model Selection */}
+                    <div>
+                        <label className="block text-sm font-bold text-slate-700 mb-2 flex items-center gap-2">
+                            <Cpu size={16} className="text-blue-600" /> AI 模型 (Model)
+                        </label>
+                        <p className="text-xs text-slate-500 mb-3">
+                            选择用于对话和分析的 Gemini 模型。同一个 API Key 通常支持所有这些模型。
+                        </p>
+                        <div className="space-y-3">
+                            {AI_MODELS.map((model) => (
+                                <button
+                                    key={model.id}
+                                    onClick={() => setLocalSettings({...localSettings, aiModel: model.id})}
+                                    className={`w-full text-left p-3 border rounded-lg transition-all flex items-start gap-3 ${
+                                        localSettings.aiModel === model.id
+                                        ? 'border-blue-500 bg-blue-50 ring-1 ring-blue-500'
+                                        : 'border-slate-200 bg-white hover:border-slate-300'
+                                    }`}
+                                >
+                                    <div className={`mt-0.5 w-4 h-4 rounded-full border flex items-center justify-center ${
+                                        localSettings.aiModel === model.id ? 'border-blue-600' : 'border-slate-400'
+                                    }`}>
+                                        {localSettings.aiModel === model.id && <div className="w-2 h-2 rounded-full bg-blue-600"></div>}
+                                    </div>
+                                    <div>
+                                        <p className={`text-sm font-bold ${localSettings.aiModel === model.id ? 'text-blue-800' : 'text-slate-700'}`}>
+                                            {model.name}
+                                        </p>
+                                        <p className="text-xs text-slate-500 mt-1">{model.desc}</p>
+                                    </div>
+                                </button>
+                            ))}
+                        </div>
                     </div>
 
                     <div className="w-full h-px bg-slate-200"></div>
