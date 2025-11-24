@@ -1,0 +1,1015 @@
+
+import React, { useEffect, useRef, useState, useCallback } from 'react';
+import ePub, { Rendition } from 'epubjs';
+import { Book, ReaderSettings, SelectionData, NavItem, Annotation, BookmarkData } from '../types';
+import { ChevronLeft, ChevronRight, ZoomIn, ZoomOut, Loader2, Sparkles, Copy, MessageSquare, List as ListIcon, FilePenLine, Search, X, ArrowUp, ArrowDown } from 'lucide-react';
+import ReaderMenu from './ReaderMenu';
+import AnnotationModal from './AnnotationModal';
+import { saveUserData, loadUserData } from '../utils/storage';
+
+interface ReaderProps {
+  book: Book | null;
+  settings: ReaderSettings;
+  onSelection: (data: SelectionData) => void;
+  onSettingsChange: (newSettings: ReaderSettings) => void;
+  onAiQuery: (text: string) => void;
+  onToggleChat: () => void;
+}
+
+interface SelectionMenu {
+  visible: boolean;
+  x: number;
+  y: number;
+  cfiRange: string | null;
+  text: string;
+}
+
+const PALETTE: Record<string, string> = {
+  red: '#fca5a5',
+  orange: '#fdba74',
+  yellow: '#fde047',
+  green: '#86efac',
+  teal: '#5eead4',
+  blue: '#93c5fd',
+  indigo: '#a5b4fc',
+  purple: '#d8b4fe'
+};
+
+const Reader: React.FC<ReaderProps> = ({ book, settings, onSelection, onSettingsChange, onAiQuery, onToggleChat }) => {
+  const viewerRef = useRef<HTMLDivElement>(null);
+  const renditionRef = useRef<Rendition | null>(null);
+  const bookRef = useRef<any>(null); 
+  const selectionTimeRef = useRef<number>(0);
+  
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [menu, setMenu] = useState<SelectionMenu>({ visible: false, x: 0, y: 0, cfiRange: null, text: '' });
+  
+  // Navigation State
+  const [isNavOpen, setIsNavOpen] = useState(false);
+  const [toc, setToc] = useState<NavItem[]>([]);
+  const [landmarks, setLandmarks] = useState<any[]>([]);
+  const [currentCfi, setCurrentCfi] = useState<string>('');
+  const [progress, setProgress] = useState<number>(0);
+  const [isGeneratingLocations, setIsGeneratingLocations] = useState(false);
+  
+  // User Data State
+  const [bookmarks, setBookmarks] = useState<BookmarkData[]>([]);
+  const [annotations, setAnnotations] = useState<Annotation[]>([]);
+  // Critical: Use Ref to access latest annotations inside stale closures (event listeners)
+  const annotationsRef = useRef(annotations);
+  useEffect(() => { annotationsRef.current = annotations; }, [annotations]);
+
+  // Annotation Modal State (Create & Edit)
+  const [isAnnotationModalOpen, setIsAnnotationModalOpen] = useState(false);
+  const [pendingAnnotation, setPendingAnnotation] = useState<{cfi: string, text: string} | null>(null);
+  const [editingAnnotation, setEditingAnnotation] = useState<Annotation | null>(null);
+
+  // Search Bar State (Floating Ctrl+F)
+  const [isSearchBarOpen, setIsSearchBarOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchMatches, setSearchMatches] = useState<any[]>([]);
+  const [currentMatchIndex, setCurrentMatchIndex] = useState(-1);
+  const [isSearching, setIsSearching] = useState(false);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
+  // Apply theme styles
+  const getThemeColors = useCallback(() => {
+    switch (settings.theme) {
+      case 'dark': return { bg: '#242424', text: '#b0b0b0' };
+      case 'sepia': return { bg: '#fbf7ef', text: '#5c4b37' };
+      default: return { bg: '#ffffff', text: '#333333' };
+    }
+  }, [settings.theme]);
+
+  const getFontFamily = useCallback(() => {
+    switch(settings.fontFamily) {
+        case 'sans': return 'Inter, "PingFang SC", "Microsoft YaHei", sans-serif';
+        case 'kai': return '"Kaiti SC", "KaiTi", "STKaiti", serif';
+        case 'serif': 
+        default: return 'Merriweather, "Songti SC", "SimSun", serif';
+    }
+  }, [settings.fontFamily]);
+
+  const colors = getThemeColors();
+
+  const applyStyles = useCallback((rendition: Rendition, currentSettings: ReaderSettings) => {
+    const themeColors = getThemeColors();
+    const font = getFontFamily();
+    
+    // 1. Basic Font Size
+    rendition.themes.fontSize(`${currentSettings.fontSize}px`);
+
+    // 2. CSS Rules
+    const rules: any = {
+      body: { 
+        'color': `${themeColors.text} !important`, 
+        'background': `${themeColors.bg} !important`,
+        'font-family': `${font} !important`,
+        'line-height': `${currentSettings.lineHeight} !important`,
+        'letter-spacing': `${currentSettings.letterSpacing}px !important`,
+        'padding': currentSettings.flow === 'scrolled' 
+                   ? `20px ${currentSettings.marginX}% !important` // Scroll needs Y padding
+                   : `0 ${currentSettings.marginX}% !important`, // Paged usually handles height via column
+        'max-width': '100vw !important',
+        'box-sizing': 'border-box !important',
+        'text-align': currentSettings.align === 'justify' ? 'justify !important' : 
+                      currentSettings.align === 'left' ? 'left !important' : 'auto',
+      },
+      'p': {
+        'font-family': 'inherit !important',
+        'font-size': '100% !important',
+        'line-height': 'inherit !important',
+        'color': 'inherit !important',
+        'margin-bottom': `${currentSettings.paragraphSpacing}px !important`,
+        'margin-top': '0 !important'
+      },
+      '::selection': {
+        'background': `${currentSettings.highlightColor} !important`,
+        'color': 'black !important'
+      }
+    };
+
+    // Advanced CSS injections based on Toggles
+    if (currentSettings.hideFurigana) {
+        rules['ruby rt'] = { 'display': 'none !important' };
+    }
+    
+    if (currentSettings.hideFootnotes) {
+        rules['aside[epub|type~="footnote"]'] = { 'display': 'none !important' };
+        rules['.footnote'] = { 'display': 'none !important' };
+    }
+
+    if (currentSettings.reduceMotion) {
+        rules['*'] = { 
+            'transition': 'none !important',
+            'animation': 'none !important'
+        };
+    }
+    
+    if (currentSettings.disableRtl) {
+        rules['html'] = { 'direction': 'ltr !important' };
+        rules['body'] = { 'direction': 'ltr !important' };
+    }
+
+    rendition.themes.register('custom', rules);
+    rendition.themes.select('custom');
+    
+    // Spread / Columns handling
+    if (currentSettings.flow === 'paginated') {
+        if (currentSettings.columns === '1') {
+            rendition.spread('none');
+        } else if (currentSettings.columns === '2') {
+             rendition.spread('always'); 
+        } else {
+             rendition.spread('auto');
+        }
+    }
+    
+  }, [getThemeColors, getFontFamily]);
+
+  // Generate CSS for annotations and SEARCH RESULTS
+  const getAnnotationCss = () => {
+      // User Highlights
+      const highlightStyles = Object.entries(PALETTE).map(([name, color]) => `
+        g[class*="hl-${name}"], .hl-${name} {
+            fill: ${color} !important;
+            fill-opacity: 0.3 !important;
+            cursor: pointer;
+            pointer-events: all !important;
+        }
+        g[class*="hl-${name}"] rect, .hl-${name} rect,
+        g[class*="hl-${name}"] path, .hl-${name} path { 
+            fill: ${color} !important; 
+            fill-opacity: 0.3 !important; 
+            stroke: none !important;
+            pointer-events: all !important;
+        }
+        g[class*="ul-${name}"], .ul-${name} {
+             fill-opacity: 0 !important;
+             stroke: ${color} !important;
+             stroke-width: 2px !important;
+             cursor: pointer;
+             pointer-events: all !important;
+        }
+      `).join('\n');
+
+      // Search Result Styles
+      const searchStyles = `
+        /* General Search Results */
+        .search-result {
+            fill: #fde047 !important; /* Yellow */
+            fill-opacity: 0.4 !important;
+            cursor: pointer;
+        }
+        g[class*="search-result"] rect {
+            fill: #fde047 !important;
+            fill-opacity: 0.4 !important;
+        }
+
+        /* Active Search Result - HIGH CONTRAST */
+        .search-result-active {
+            fill: #f97316 !important; /* Bright Orange */
+            fill-opacity: 0.7 !important;
+            stroke: #ea580c !important; /* Darker Orange Border */
+            stroke-width: 2px !important;
+        }
+        g[class*="search-result-active"] rect {
+            fill: #f97316 !important;
+            fill-opacity: 0.7 !important;
+            stroke: #ea580c !important;
+            stroke-width: 2px !important;
+        }
+      `;
+
+      return highlightStyles + searchStyles;
+  };
+
+  // Keyboard Shortcuts (Ctrl+F)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+        if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
+            e.preventDefault();
+            setIsSearchBarOpen(true);
+            // Small delay to ensure modal is mounted
+            setTimeout(() => searchInputRef.current?.focus(), 50);
+            // If text is selected, pre-fill it
+            const selection = window.getSelection()?.toString();
+            if(selection) setSearchQuery(selection);
+        }
+        if (e.key === 'Escape') {
+            if (isSearchBarOpen) {
+                closeSearchBar();
+            }
+        }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    
+    if (renditionRef.current) {
+        renditionRef.current.hooks.content.register((contents: any) => {
+            contents.document.addEventListener('keydown', handleKeyDown);
+        });
+    }
+
+    return () => {
+        window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isSearchBarOpen]);
+
+  // Handle Text Selection (TXT Mode)
+  const handleTxtSelection = useCallback(() => {
+    const selection = window.getSelection();
+    if (selection && selection.toString().trim().length > 0) {
+      const range = selection.getRangeAt(0);
+      const rect = range.getBoundingClientRect();
+      
+      setMenu({
+        visible: true,
+        x: rect.left + (rect.width / 2),
+        y: rect.top - 10,
+        cfiRange: null, 
+        text: selection.toString().trim()
+      });
+      
+      onSelection({ text: selection.toString().trim() });
+    }
+  }, [onSelection]);
+
+  // Menu Actions
+  const handleOpenAnnotationModal = () => {
+    if (menu.cfiRange && menu.text) {
+      setPendingAnnotation({ cfi: menu.cfiRange, text: menu.text });
+      setEditingAnnotation(null); // Clear editing state
+      setIsAnnotationModalOpen(true);
+      setMenu(prev => ({ ...prev, visible: false }));
+    }
+  };
+
+  const handleSaveAnnotation = (data: { note: string; color: string; style: 'highlight' | 'underline'; tags: string[] }) => {
+    if (!renditionRef.current) return;
+
+    // Determine target CFI (either new or editing)
+    const cfi = editingAnnotation ? editingAnnotation.cfiRange : pendingAnnotation?.cfi;
+    const textContext = editingAnnotation ? editingAnnotation.text : pendingAnnotation?.text;
+
+    if (!cfi || !textContext) return;
+
+    // Remove old visual if editing
+    if (editingAnnotation) {
+        try {
+            renditionRef.current.annotations.remove(cfi, 'highlight');
+            renditionRef.current.annotations.remove(cfi, 'underline');
+        } catch(e) {}
+    }
+
+    // Add new visual
+    const prefix = data.style === 'highlight' ? 'hl' : 'ul';
+    const className = `${prefix}-${data.color}`; 
+    try {
+        // We pass the CFI as the 'data' so we can look it up later on click
+        // Critical: The data object must be the third argument
+        renditionRef.current.annotations.add(data.style, cfi, { cfiRange: cfi }, undefined, className);
+    } catch(e) {
+        console.warn("Failed to add visual annotation", e);
+    }
+
+    const newAnnotation: Annotation = {
+        cfiRange: cfi,
+        text: textContext,
+        note: data.note,
+        color: data.color,
+        style: data.style,
+        tags: data.tags,
+        date: new Date().toISOString(),
+        type: 'annotation'
+    };
+
+    setAnnotations(prev => {
+        // If editing, replace. If new, push.
+        const updated = editingAnnotation 
+            ? prev.map(a => a.cfiRange === cfi ? newAnnotation : a)
+            : [...prev, newAnnotation];
+        
+        if (book) saveUserData(book.id, { annotations: updated });
+        return updated;
+    });
+
+    setPendingAnnotation(null);
+    setEditingAnnotation(null);
+    clearSelection();
+  };
+
+  const handleDeleteAnnotation = () => {
+      if (editingAnnotation && editingAnnotation.cfiRange) {
+          handleRemoveAnnotation(editingAnnotation.cfiRange);
+      }
+  };
+
+  const handleAskAI = () => {
+      onAiQuery(menu.text);
+      setMenu(prev => ({ ...prev, visible: false }));
+  };
+  
+  const handleCopy = () => {
+      navigator.clipboard.writeText(menu.text);
+      setMenu(prev => ({ ...prev, visible: false }));
+      clearSelection();
+  };
+  
+  const handleRemoveBookmark = (cfi: string) => {
+      setBookmarks(prev => {
+          const updated = prev.filter(b => b.cfi !== cfi);
+          if (book) saveUserData(book.id, { bookmarks: updated });
+          return updated;
+      });
+  };
+
+  const handleRemoveAnnotation = (cfi: string) => {
+      if (renditionRef.current) {
+         try {
+             renditionRef.current.annotations.remove(cfi, 'highlight');
+             renditionRef.current.annotations.remove(cfi, 'underline');
+         } catch(e) { console.warn(e); }
+      }
+      setAnnotations(prev => {
+          const updated = prev.filter(a => a.cfiRange !== cfi);
+          if (book) saveUserData(book.id, { annotations: updated });
+          return updated;
+      });
+  };
+
+  const clearSelection = () => {
+      window.getSelection()?.removeAllRanges();
+      if (renditionRef.current) {
+         // @ts-ignore
+         const iframe = viewerRef.current?.querySelector('iframe');
+         if(iframe && iframe.contentWindow) {
+             iframe.contentWindow.getSelection()?.removeAllRanges();
+         }
+      }
+  };
+
+  const handleNavigate = (href: string) => {
+      if (renditionRef.current) {
+          renditionRef.current.display(href);
+      }
+  };
+
+  // --- SEARCH LOGIC (Shared & Interactive) ---
+  const performSearch = async (query: string): Promise<any[]> => {
+      if (!bookRef.current) return [];
+      if (!query || query.length < 2) return [];
+
+      // Re-implement sidebar search using item.load() manually for robustness
+      const results: any[] = [];
+      const spine = bookRef.current.spine;
+      const spineLength = spine.length;
+      const lowerQuery = query.toLowerCase();
+      
+      for (let i = 0; i < spineLength; i++) {
+          try {
+              const item = spine.get(i);
+              if (!item || !item.href) continue;
+              const doc = await bookRef.current.load(item.href);
+              
+              if (doc && doc.body) {
+                  const textContent = doc.body.innerText || doc.body.textContent || "";
+                  const cleanText = textContent.replace(/\s+/g, ' ');
+                  const lowerText = cleanText.toLowerCase();
+                  
+                  let startIndex = 0;
+                  let index = lowerText.indexOf(lowerQuery, startIndex);
+
+                  while (index !== -1) {
+                      const start = Math.max(0, index - 30);
+                      const end = Math.min(cleanText.length, index + query.length + 30);
+                      const excerpt = cleanText.substring(start, end);
+                      
+                      // Approximation for Sidebar navigation (Sidebar doesn't highlight specific range, just jumps to chapter)
+                      results.push({
+                          cfi: item.href, 
+                          excerpt: excerpt,
+                          label: item.idref || `Chapter ${i+1}`,
+                          context: excerpt
+                      });
+                      
+                      startIndex = index + query.length;
+                      index = lowerText.indexOf(lowerQuery, startIndex);
+                      
+                      // Cap results per chapter for performance if needed, but user wants "all"
+                      if (results.length > 500) break; 
+                  }
+              }
+          } catch (e) { console.warn(`Skipping search for section ${i}`); }
+      }
+      return results;
+  };
+  
+  // Floating Search Bar Logic
+  const handleInteractiveSearch = async (e?: React.FormEvent) => {
+      if (e) e.preventDefault();
+      if (!searchQuery.trim()) return;
+      
+      setIsSearching(true);
+      setCurrentMatchIndex(-1);
+      
+      // Clear old search highlights
+      if (renditionRef.current) {
+          try {
+             const annotations = renditionRef.current.annotations as any;
+             if (annotations._annotations) {
+                 Object.keys(annotations._annotations).forEach(key => {
+                     const note = annotations._annotations[key];
+                     if (note.type === 'search-result' || note.type === 'search-result-active') {
+                         renditionRef.current?.annotations.remove(note.cfiRange, note.type);
+                     }
+                 });
+             }
+          } catch (e) {}
+      }
+
+      try {
+          // Use epub.js internal `find` which returns CFIs directly for highlighting
+          const results = await Promise.all(
+              // @ts-ignore
+              bookRef.current.spine.spineItems.map(item => 
+                  item.load(bookRef.current.load.bind(bookRef.current))
+                  .then((doc: any) => item.find(searchQuery))
+                  .catch(() => []) 
+              )
+          );
+          
+          const flatResults = results.flat().map((res: any) => ({
+              cfi: res.cfi,
+              excerpt: res.excerpt
+          }));
+          
+          setSearchMatches(flatResults);
+          
+          if (flatResults.length > 0) {
+              // Highlight ALL matches
+              flatResults.forEach((res: any) => {
+                 renditionRef.current?.annotations.add('highlight', res.cfi, {}, undefined, 'search-result');
+              });
+              
+              // Jump to first
+              nextSearchMatch(0, flatResults);
+          }
+          
+      } catch (error) {
+          console.error("Interactive search failed", error);
+      } finally {
+          setIsSearching(false);
+      }
+  };
+
+  const handleSearchKeyDown = (e: React.KeyboardEvent) => {
+      if (e.key === 'Enter') {
+          e.preventDefault();
+          e.shiftKey ? prevSearchMatch() : nextSearchMatch();
+      } else if (e.key === 'ArrowDown' || e.key === 'ArrowRight') {
+          // Navigate Next
+          e.preventDefault();
+          nextSearchMatch();
+      } else if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') {
+          // Navigate Prev
+          e.preventDefault();
+          prevSearchMatch();
+      }
+  };
+
+  const nextSearchMatch = (indexOverride?: number, resultsOverride?: any[]) => {
+      const matches = resultsOverride || searchMatches;
+      if (matches.length === 0) return;
+      
+      let nextIndex = indexOverride !== undefined ? indexOverride : currentMatchIndex + 1;
+      if (nextIndex >= matches.length) nextIndex = 0; // Loop
+      
+      updateActiveSearchHighlight(nextIndex, matches);
+  };
+
+  const prevSearchMatch = () => {
+      if (searchMatches.length === 0) return;
+      let nextIndex = currentMatchIndex - 1;
+      if (nextIndex < 0) nextIndex = searchMatches.length - 1; // Loop
+      
+      updateActiveSearchHighlight(nextIndex, searchMatches);
+  };
+
+  const updateActiveSearchHighlight = (index: number, matches: any[]) => {
+      // Remove 'active' class from old match if exists
+      if (currentMatchIndex !== -1 && matches[currentMatchIndex]) {
+          renditionRef.current?.annotations.remove(matches[currentMatchIndex].cfi, 'highlight');
+          // Add back as normal
+          renditionRef.current?.annotations.add('highlight', matches[currentMatchIndex].cfi, {}, undefined, 'search-result');
+      }
+
+      // Set new active
+      const match = matches[index];
+      setCurrentMatchIndex(index);
+      
+      // Update visual
+      renditionRef.current?.annotations.remove(match.cfi, 'highlight');
+      renditionRef.current?.annotations.add('highlight', match.cfi, {}, undefined, 'search-result-active');
+      
+      // Navigate
+      renditionRef.current?.display(match.cfi);
+  };
+
+  const closeSearchBar = () => {
+      setIsSearchBarOpen(false);
+      setSearchMatches([]);
+      setSearchQuery('');
+      setCurrentMatchIndex(-1);
+      // Clean up visuals
+       if (renditionRef.current) {
+          try {
+             const annotations = renditionRef.current.annotations as any;
+             const notes = annotations._annotations;
+             if (notes) {
+                 Object.keys(notes).forEach(key => {
+                     const note = notes[key];
+                     if (note.className && (note.className.includes('search-result'))) {
+                         renditionRef.current?.annotations.remove(note.cfiRange, 'highlight');
+                     }
+                 });
+             }
+          } catch (e) {}
+      }
+  };
+
+  // --- EPUB Rendering ---
+  useEffect(() => {
+    if (!book || book.type !== 'epub' || !viewerRef.current) return;
+    
+    // Clean up previous
+    if (renditionRef.current) {
+        try { renditionRef.current.destroy(); } catch(e) {}
+    }
+    viewerRef.current.innerHTML = '';
+    
+    setLoading(true);
+    setError(null);
+    setMenu(prev => ({ ...prev, visible: false }));
+    setIsGeneratingLocations(false);
+
+    let mounted = true;
+
+    try {
+      const epubBook = ePub(book.content as ArrayBuffer);
+      bookRef.current = epubBook;
+
+      // Determine Flow
+      const flowMode = settings.flow === 'scrolled' ? 'scrolled' : 'paginated';
+
+      const rendition = epubBook.renderTo(viewerRef.current, {
+        width: '100%',
+        height: '100%',
+        flow: flowMode,
+        manager: flowMode === 'scrolled' ? 'continuous' : 'default',
+        allowScriptedContent: false
+      });
+
+      renditionRef.current = rendition;
+
+      rendition.hooks.content.register((contents: any) => {
+          const doc = contents.document;
+          const head = doc.querySelector('head');
+          if (head) {
+              const style = doc.createElement('style');
+              style.innerHTML = getAnnotationCss();
+              head.appendChild(style);
+          }
+      });
+
+      const savedData = loadUserData(book.id);
+      if (savedData) {
+          setBookmarks(savedData.bookmarks || []);
+          setAnnotations(savedData.annotations || []);
+      } else {
+          setBookmarks([]);
+          setAnnotations([]);
+      }
+
+      epubBook.loaded.navigation.then((nav: any) => {
+          if (mounted) {
+              setToc(nav.toc); 
+              setLandmarks(nav.landmarks);
+          }
+      });
+
+      const startCfi = savedData?.lastCfi || undefined;
+      
+      rendition.display(startCfi).then(() => {
+        if (!mounted) return;
+        setLoading(false);
+        applyStyles(rendition, settings);
+        
+        // Restore annotations
+        if (savedData?.annotations) {
+            savedData.annotations.forEach((note: Annotation) => {
+                const prefix = note.style === 'highlight' ? 'hl' : 'ul';
+                const color = note.color || 'yellow';
+                const className = `${prefix}-${color}`;
+                try {
+                    rendition.annotations.add(note.style, note.cfiRange, { cfiRange: note.cfiRange }, undefined, className);
+                } catch(e) { console.warn(e); }
+            });
+        }
+
+        setIsGeneratingLocations(true);
+        epubBook.locations.generate(1000).then(() => {
+            setIsGeneratingLocations(false);
+            if (rendition.location) {
+                const current = rendition.currentLocation() as any;
+                if (current && current.start) {
+                    const percentage = epubBook.locations.percentageFromCfi(current.start.cfi);
+                    setProgress(percentage);
+                }
+            }
+        }).catch(() => setIsGeneratingLocations(false));
+        
+        // --- Event Listeners ---
+        
+        // 1. Text Selected
+        rendition.on('selected', (cfiRange: string, contents: any) => {
+          selectionTimeRef.current = Date.now();
+          const selection = contents.window.getSelection();
+          if (!selection || selection.rangeCount === 0) return;
+          const range = selection.getRangeAt(0);
+          const text = range.toString();
+          if (!text.trim()) return;
+
+          onSelection({ text, cfiRange });
+
+          const viewElement = viewerRef.current;
+          if (viewElement) {
+               const iframe = viewElement.querySelector('iframe');
+               if (iframe) {
+                   const iframeRect = iframe.getBoundingClientRect();
+                   const rect = range.getBoundingClientRect();
+                   if (rect.width === 0 && rect.height === 0) return;
+
+                   setMenu({
+                       visible: true,
+                       x: iframeRect.left + rect.left + (rect.width / 2),
+                       y: iframeRect.top + rect.top - 10,
+                       cfiRange: cfiRange,
+                       text: text
+                   });
+               }
+          }
+        });
+
+        // 2. Annotation Clicked (Edit Mode)
+        rendition.on('markClicked', (cfiRange: string, data: any) => {
+             // Use the REF to get the latest annotations state, ignoring closure staleness
+             const currentAnnotations = annotationsRef.current;
+             
+             const annotation = currentAnnotations.find(a => a.cfiRange === cfiRange || (data && data.cfiRange === a.cfiRange));
+             
+             if (annotation) {
+                 setEditingAnnotation(annotation);
+                 setPendingAnnotation(null);
+                 setMenu(prev => ({ ...prev, visible: false }));
+                 setIsAnnotationModalOpen(true);
+             }
+        });
+
+        rendition.on('click', () => {
+            if (Date.now() - selectionTimeRef.current < 300) return;
+            setMenu(prev => ({ ...prev, visible: false }));
+        });
+        
+        rendition.on('relocated', (location: any) => {
+            setMenu(prev => ({ ...prev, visible: false }));
+            setCurrentCfi(location.start.cfi);
+            
+            if (epubBook.locations.length() > 0) {
+                 const percentage = epubBook.locations.percentageFromCfi(location.start.cfi);
+                 setProgress(percentage);
+                 saveUserData(book.id, { lastCfi: location.start.cfi, progress: percentage });
+            } else {
+                 saveUserData(book.id, { lastCfi: location.start.cfi });
+            }
+        });
+
+        rendition.on('resized', () => {
+            setMenu(prev => ({ ...prev, visible: false }));
+        });
+
+      }).catch(err => {
+        if (!mounted) return;
+        setError("Failed to render this EPUB file.");
+        setLoading(false);
+      });
+
+    } catch (e: any) {
+      if (mounted) {
+        setError(`Error loading book: ${e.message}`);
+        setLoading(false);
+      }
+    }
+
+    return () => {
+      mounted = false;
+      if (renditionRef.current) {
+        try { renditionRef.current.destroy(); } catch(e) {}
+        renditionRef.current = null;
+      }
+    };
+  }, [book?.id, settings.flow]); 
+
+  // Update styles immediately when other settings change (no re-init needed)
+  useEffect(() => {
+    if (book?.type === 'epub' && renditionRef.current) {
+       applyStyles(renditionRef.current, settings);
+    }
+  }, [settings, applyStyles]);
+
+  const prevPage = () => renditionRef.current?.prev();
+  const nextPage = () => renditionRef.current?.next();
+
+  if (!book) return null;
+
+  // --- TXT Render ---
+  if (book.type === 'txt') {
+    return (
+      <div 
+        className="flex-1 h-full w-full overflow-y-auto relative reader-scroll transition-colors duration-300"
+        style={{ backgroundColor: colors.bg, color: colors.text }}
+        onMouseUp={handleTxtSelection}
+      >
+        <div 
+          className="max-w-4xl mx-auto"
+          style={{ 
+             fontFamily: getFontFamily().replace(/"/g, ''),
+             fontSize: `${settings.fontSize}px`, 
+             lineHeight: settings.lineHeight, 
+             letterSpacing: `${settings.letterSpacing}px`,
+             paddingTop: '2rem',
+             paddingBottom: '2rem',
+             paddingLeft: `${settings.marginX}%`,
+             paddingRight: `${settings.marginX}%`,
+             whiteSpace: 'pre-wrap',
+             textAlign: settings.align === 'justify' ? 'justify' : settings.align === 'left' ? 'left' : 'start'
+          }}
+        >
+          {(book.content as string).split('\n').map((para, idx) => (
+             <p key={idx} style={{ marginBottom: `${settings.paragraphSpacing}px` }}>{para}</p>
+          ))}
+        </div>
+        
+        <style>{`
+            ::selection {
+                background: ${settings.highlightColor} !important;
+                color: black !important;
+            }
+        `}</style>
+        
+        {menu.visible && (
+            <div 
+                className="fixed z-50 flex items-center bg-slate-800 text-white rounded-lg shadow-xl py-1 px-1 transform -translate-x-1/2 -translate-y-full mb-2 animate-in fade-in zoom-in-95 duration-200 border border-slate-700"
+                style={{ left: menu.x, top: menu.y }}
+            >
+                 <button onClick={handleCopy} className="p-2 hover:bg-slate-700 rounded transition-colors" title="Copy">
+                    <Copy size={14} />
+                </button>
+                 <button onClick={handleAskAI} className="p-2 hover:bg-slate-700 rounded-md flex items-center gap-2 text-xs font-semibold bg-slate-700/50 ml-1" title="Ask AI">
+                    <Sparkles size={14} className="text-amber-400" />
+                    <span>Ask AI</span>
+                </button>
+            </div>
+        )}
+
+        <div className="absolute top-4 right-4 z-20 flex items-center gap-2 p-1.5 rounded-lg bg-white/90 shadow-sm border border-slate-200/50 backdrop-blur-sm">
+             <button onClick={() => onSettingsChange({...settings, fontSize: Math.max(12, settings.fontSize - 2)})} className="p-1.5 hover:bg-slate-100 rounded text-slate-600"><ZoomOut size={18} /></button>
+             <span className="text-xs font-medium w-8 text-center text-slate-600">{settings.fontSize}px</span>
+             <button onClick={() => onSettingsChange({...settings, fontSize: Math.min(32, settings.fontSize + 2)})} className="p-1.5 hover:bg-slate-100 rounded text-slate-600"><ZoomIn size={18} /></button>
+             <div className="w-px h-4 bg-slate-300 mx-1"></div>
+             <button onClick={onToggleChat} className="p-1.5 hover:bg-blue-50 text-blue-600 rounded transition-colors" title="Open AI Chat">
+                 <MessageSquare size={18} />
+             </button>
+        </div>
+      </div>
+    );
+  }
+
+  // --- PDF Render ---
+  if (book.type === 'pdf') {
+     const blob = new Blob([book.content as ArrayBuffer], { type: 'application/pdf' });
+     const url = URL.createObjectURL(blob);
+     return (
+        <div className="flex-1 h-full w-full bg-slate-200 flex flex-col items-center justify-center relative overflow-hidden">
+            <iframe src={url} className="w-full h-full border-none" title="PDF Reader" />
+            <div className="absolute top-4 right-4 z-20 flex items-center gap-2 p-1.5 rounded-lg bg-white/90 shadow-sm border border-slate-200/50 backdrop-blur-sm">
+                 <button onClick={onToggleChat} className="p-1.5 hover:bg-blue-50 text-blue-600 rounded transition-colors" title="Open AI Chat">
+                     <MessageSquare size={18} />
+                 </button>
+            </div>
+        </div>
+     );
+  }
+
+  // --- EPUB Render ---
+  return (
+    <div className="flex-1 flex flex-col h-full w-full relative overflow-hidden transition-colors duration-300" style={{ backgroundColor: colors.bg }}>
+      
+      {/* Fallback global styles in case iframe hook is late */}
+      <style>{getAnnotationCss()}</style>
+
+      {/* Floating Search Bar (Ctrl+F) */}
+      {isSearchBarOpen && (
+        <div className="absolute top-4 left-1/2 -translate-x-1/2 z-50 w-full max-w-md animate-in fade-in slide-in-from-top-2 duration-200">
+           <div className="bg-white/95 backdrop-blur shadow-xl rounded-full border border-slate-200 px-4 py-2 flex items-center gap-2 ring-2 ring-slate-100">
+               <Search size={16} className="text-slate-400" />
+               <div className="flex-1">
+                   <input
+                      ref={searchInputRef}
+                      type="text"
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      onKeyDown={handleSearchKeyDown}
+                      placeholder="查找内容..."
+                      className="w-full bg-transparent border-none outline-none text-sm text-slate-700 placeholder-slate-400"
+                   />
+               </div>
+               <div className="flex items-center gap-1 border-l border-slate-200 pl-2">
+                    <button onClick={() => handleInteractiveSearch()} className="mr-2 p-1 text-blue-600 font-bold text-xs hover:bg-blue-50 rounded">
+                        Go
+                    </button>
+                   <span className="text-xs text-slate-400 mr-2 min-w-[30px] text-center font-mono">
+                       {searchMatches.length > 0 ? `${currentMatchIndex + 1}/${searchMatches.length}` : '0/0'}
+                   </span>
+                   <button onClick={() => prevSearchMatch()} className="p-1 hover:bg-slate-100 rounded text-slate-600 disabled:opacity-50" disabled={searchMatches.length === 0} title="Previous (Up/Left)">
+                       <ArrowUp size={16} />
+                   </button>
+                   <button onClick={() => nextSearchMatch()} className="p-1 hover:bg-slate-100 rounded text-slate-600 disabled:opacity-50" disabled={searchMatches.length === 0} title="Next (Down/Right/Enter)">
+                       <ArrowDown size={16} />
+                   </button>
+                   <button onClick={closeSearchBar} className="p-1 hover:bg-slate-100 rounded text-slate-400 hover:text-red-500 ml-1">
+                       <X size={16} />
+                   </button>
+               </div>
+           </div>
+           {isSearching && (
+               <div className="absolute -bottom-8 left-0 right-0 text-center">
+                    <span className="text-[10px] bg-black/60 text-white px-3 py-1 rounded-full backdrop-blur-md shadow-sm">
+                        <Loader2 size={8} className="inline animate-spin mr-1"/> 正在搜索全文...
+                    </span>
+               </div>
+           )}
+        </div>
+      )}
+
+      {loading && (
+        <div className="absolute inset-0 flex items-center justify-center z-10 bg-white/50 backdrop-blur-sm">
+          <Loader2 className="animate-spin text-amber-600" size={32} />
+        </div>
+      )}
+
+      {error && (
+        <div className="absolute inset-0 flex items-center justify-center z-10 p-8 text-center text-red-500">
+          <p>{error}</p>
+        </div>
+      )}
+
+      <div className="flex-1 relative z-0 overflow-hidden w-full h-full">
+          <div ref={viewerRef} className="h-full w-full" />
+      </div>
+      
+      <ReaderMenu 
+         isOpen={isNavOpen}
+         onClose={() => setIsNavOpen(false)}
+         toc={toc}
+         landmarks={landmarks}
+         onNavigate={handleNavigate}
+         bookmarks={bookmarks}
+         onRemoveBookmark={handleRemoveBookmark}
+         annotations={annotations}
+         onRemoveAnnotation={handleRemoveAnnotation}
+         onSearch={performSearch}
+         currentPage={currentCfi}
+         currentPercentage={progress}
+      />
+      
+      <AnnotationModal 
+        isOpen={isAnnotationModalOpen}
+        onClose={() => setIsAnnotationModalOpen(false)}
+        onSave={handleSaveAnnotation}
+        onDelete={handleDeleteAnnotation}
+        selectedText={editingAnnotation ? editingAnnotation.text : (pendingAnnotation?.text || '')}
+        initialData={editingAnnotation ? {
+            note: editingAnnotation.note,
+            color: editingAnnotation.color,
+            style: editingAnnotation.style,
+            tags: editingAnnotation.tags
+        } : undefined}
+      />
+
+      {menu.visible && (
+          <div 
+            className="fixed z-50 flex items-center bg-slate-800 text-white rounded-lg shadow-xl py-1.5 px-2 transform -translate-x-1/2 -translate-y-full gap-2 animate-in fade-in zoom-in-95 duration-200 border border-slate-700"
+            style={{ left: menu.x, top: menu.y - 10 }}
+          >
+            <button 
+                onClick={handleOpenAnnotationModal}
+                className="flex items-center gap-1.5 px-2 py-1.5 hover:bg-slate-700 rounded transition-colors text-blue-200 font-medium text-xs" 
+                title="Add Note & Highlight"
+            >
+                <FilePenLine size={16} />
+                <span>注解</span>
+            </button>
+            <div className="w-px h-4 bg-slate-600 mx-0.5"></div>
+            <button 
+                onClick={handleCopy}
+                className="p-1.5 hover:bg-slate-700 rounded transition-colors text-slate-300 hover:text-white" 
+                title="Copy"
+            >
+                <Copy size={16} />
+            </button>
+            <div className="w-px h-4 bg-slate-600 mx-0.5"></div>
+            <button 
+                onClick={handleAskAI}
+                className="px-2 py-1.5 hover:bg-slate-700 rounded flex items-center gap-1.5 transition-colors bg-gradient-to-r from-amber-500/10 to-transparent border border-white/5" 
+                title="Ask AI about this"
+            >
+                <Sparkles size={16} className="text-amber-400" />
+                <span className="text-xs font-bold text-slate-100">Ask AI</span>
+            </button>
+          </div>
+      )}
+
+      {!settings.hideIndicators && settings.flow !== 'scrolled' && (
+        <div className="absolute bottom-6 left-0 right-0 flex justify-center gap-8 pointer-events-none z-20">
+            <button onClick={prevPage} className="pointer-events-auto p-2 rounded-full bg-slate-900/10 hover:bg-slate-900/20 text-slate-700 transition-all backdrop-blur-sm"><ChevronLeft size={24} /></button>
+            <button onClick={nextPage} className="pointer-events-auto p-2 rounded-full bg-slate-900/10 hover:bg-slate-900/20 text-slate-700 transition-all backdrop-blur-sm"><ChevronRight size={24} /></button>
+        </div>
+      )}
+
+      <div className="absolute top-4 right-4 z-20 flex items-center gap-2 p-1.5 rounded-lg bg-white/90 shadow-sm border border-slate-200/50 backdrop-blur-sm">
+         <button onClick={() => onSettingsChange({...settings, fontSize: Math.max(12, settings.fontSize - 2)})} className="p-1.5 hover:bg-slate-100 rounded text-slate-600"><ZoomOut size={18} /></button>
+         <span className="text-xs font-medium w-8 text-center text-slate-600">{settings.fontSize}px</span>
+         <button onClick={() => onSettingsChange({...settings, fontSize: Math.min(32, settings.fontSize + 2)})} className="p-1.5 hover:bg-slate-100 rounded text-slate-600"><ZoomIn size={18} /></button>
+         <div className="w-px h-4 bg-slate-300 mx-1"></div>
+         <button onClick={onToggleChat} className="p-1.5 hover:bg-blue-50 text-blue-600 rounded transition-colors" title="Open AI Chat">
+             <MessageSquare size={18} />
+         </button>
+      </div>
+
+      <div className="absolute top-4 left-4 z-20">
+          <button 
+            onClick={() => setIsNavOpen(true)}
+            className="p-2 bg-white/90 rounded-lg shadow-sm border border-slate-200/50 backdrop-blur-sm text-slate-700 hover:text-blue-600 hover:bg-white transition-all"
+            title="Menu"
+          >
+              <ListIcon size={20} />
+          </button>
+      </div>
+
+    </div>
+  );
+};
+
+export default Reader;

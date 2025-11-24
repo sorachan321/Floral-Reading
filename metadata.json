@@ -1,0 +1,5 @@
+{
+  "name": "Floral Reading",
+  "description": "A dual-mode AI-powered e-book reader supporting EPUB and TXT formats. Features immersive reading themes, text analysis, and context-aware AI assistance using Google Gemini.",
+  "requestFramePermissions": []
+}
