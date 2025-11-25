@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect } from 'react';
-import { X, Key, Check, Type, LayoutTemplate, Sparkles, RefreshCcw, Save, ScrollText, BookOpen, AlignJustify, AlignLeft, Columns, Smartphone, Cpu } from 'lucide-react';
+import { X, Key, Check, Type, LayoutTemplate, Sparkles, RefreshCcw, Save, ScrollText, BookOpen, AlignJustify, AlignLeft, Columns, Smartphone, Cpu, MessageSquare, Layers } from 'lucide-react';
 import { ReaderSettings } from '../types';
 
 interface SettingsModalProps {
@@ -456,6 +456,32 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
                         />
                          <p className="text-xs text-slate-500 mt-2">
                             API Key 仅存储在本地。
+                        </p>
+                    </div>
+
+                    <div className="w-full h-px bg-slate-200"></div>
+
+                    {/* Plan A vs Plan B Toggle */}
+                    <div>
+                         <label className="block text-sm font-bold text-slate-700 mb-3 flex items-center gap-2">
+                            <Layers size={16} className="text-indigo-500" /> AI 交互模式 (Interaction Mode)
+                        </label>
+                        <div className="grid grid-cols-2 gap-4">
+                             <ToggleCard 
+                                active={localSettings.aiDisplayMode === 'inline'} 
+                                onClick={() => setLocalSettings({...localSettings, aiDisplayMode: 'inline'})}
+                                icon={MessageSquare}
+                                label="Plan A: 嵌入式 (Inline)"
+                            />
+                            <ToggleCard 
+                                active={localSettings.aiDisplayMode === 'popup'} 
+                                onClick={() => setLocalSettings({...localSettings, aiDisplayMode: 'popup'})}
+                                icon={LayoutTemplate}
+                                label="Plan B: 悬浮窗 (Popup)"
+                            />
+                        </div>
+                        <p className="text-xs text-slate-500 mt-2">
+                             Plan A 将回答直接嵌入段落之间。 Plan B 会打开一个精美的底部悬浮卡片。
                         </p>
                     </div>
 

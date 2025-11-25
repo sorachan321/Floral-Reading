@@ -1,11 +1,16 @@
 
 import React, { useEffect, useRef, useState, useCallback } from 'react';
+import ReactDOM from 'react-dom';
 import ePub, { Rendition } from 'epubjs';
-import { Book, ReaderSettings, SelectionData, NavItem, Annotation, BookmarkData } from '../types';
+import { Book, ReaderSettings, SelectionData, NavItem, Annotation, BookmarkData, ActiveInlineNote } from '../types';
 import { ChevronLeft, ChevronRight, ZoomIn, ZoomOut, Loader2, Sparkles, Copy, MessageSquare, List as ListIcon, FilePenLine, Search, X, ArrowUp, ArrowDown } from 'lucide-react';
 import ReaderMenu from './ReaderMenu';
 import AnnotationModal from './AnnotationModal';
+import InlineAiPanel from './InlineAiPanel';
+import FloatingAiCard from './FloatingAiCard';
 import { saveUserData, loadUserData } from '../utils/storage';
+import { geminiService } from '../services/geminiService';
+import { v4 as uuidv4 } from 'uuid';
 
 interface ReaderProps {
   book: Book | null;
@@ -57,9 +62,14 @@ const Reader: React.FC<ReaderProps> = ({ book, settings, onSelection, onSettings
   // User Data State
   const [bookmarks, setBookmarks] = useState<BookmarkData[]>([]);
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
-  // Critical: Use Ref to access latest annotations inside stale closures (event listeners)
   const annotationsRef = useRef(annotations);
   useEffect(() => { annotationsRef.current = annotations; }, [annotations]);
+
+  // Inline AI State (Plan A)
+  const [inlineNotes, setInlineNotes] = useState<ActiveInlineNote[]>([]);
+
+  // Popup AI State (Plan B)
+  const [activePopupNote, setActivePopupNote] = useState<ActiveInlineNote | null>(null);
 
   // Annotation Modal State (Create & Edit)
   const [isAnnotationModalOpen, setIsAnnotationModalOpen] = useState(false);
@@ -100,13 +110,88 @@ const Reader: React.FC<ReaderProps> = ({ book, settings, onSelection, onSettings
       
       const handleMouseMove = (e: MouseEvent) => {
           if (rulerRef.current) {
-              // Direct DOM update for performance
               rulerRef.current.style.top = `${e.clientY - 16}px`;
           }
       };
       window.addEventListener('mousemove', handleMouseMove);
       return () => window.removeEventListener('mousemove', handleMouseMove);
   }, [settings.enableReadingRuler]);
+
+  // --- Inline AI Logic (Plan A) ---
+
+  // Step 1: Initialize the panel (waiting for user input)
+  const openInlinePanel = (text: string, contextId: string, domNode?: HTMLElement) => {
+      const noteId = uuidv4();
+      const newNote: ActiveInlineNote = {
+          id: noteId,
+          textContext: text,
+          aiResponse: '', // Empty initially -> triggers input mode
+          isLoading: false,
+          domNode: domNode, 
+          cfi: contextId
+      };
+      
+      // CHECK MODE
+      if (settings.aiDisplayMode === 'popup') {
+          setActivePopupNote(newNote);
+      } else {
+          setInlineNotes(prev => [...prev, newNote]);
+      }
+  };
+
+  // Step 2: User submits prompt -> Trigger API
+  // Generic handler for both Inline and Popup
+  const handleAiSubmit = async (note: ActiveInlineNote, prompt: string) => {
+      // Set loading state
+      const updateState = (isLoading: boolean, response?: string) => {
+          if (settings.aiDisplayMode === 'popup') {
+              setActivePopupNote(prev => prev ? { ...prev, isLoading, aiResponse: response !== undefined ? response : prev.aiResponse } : null);
+          } else {
+              setInlineNotes(prev => prev.map(n => n.id === note.id ? { ...n, isLoading, aiResponse: response !== undefined ? response : n.aiResponse } : n));
+          }
+      };
+
+      updateState(true);
+
+      try {
+          // Construct prompt based on user input + context
+          const fullPrompt = `${prompt}\n\nTarget Text:\n"${note.textContext}"`;
+          
+          const stream = await geminiService.sendMessageStream(
+              fullPrompt, 
+              undefined, 
+              undefined, 
+              settings.aiModel
+          );
+          
+          let fullText = "";
+          for await (const chunk of stream) {
+              const textChunk = chunk.text || "";
+              fullText += textChunk;
+              updateState(true, fullText);
+          }
+          
+          updateState(false);
+
+      } catch (e) {
+          updateState(false, "Error generating response. Please try again.");
+      }
+  };
+
+  const removeInlineNote = (id: string) => {
+      const note = inlineNotes.find(n => n.id === id);
+      if (note && note.domNode) {
+          // Clean up DOM for EPUB
+          note.domNode.remove();
+      }
+      setInlineNotes(prev => prev.filter(n => n.id !== id));
+  };
+  
+  const closePopupNote = () => {
+      setActivePopupNote(null);
+  };
+
+  // --- Style Injection ---
 
   const applyStyles = useCallback((rendition: Rendition, currentSettings: ReaderSettings) => {
     const themeColors = getThemeColors();
@@ -140,10 +225,39 @@ const Reader: React.FC<ReaderProps> = ({ book, settings, onSelection, onSettings
         'margin-top': '0 !important',
         // Base transition for focus mode
         'transition': 'opacity 0.3s ease, color 0.3s ease !important',
+        'position': 'relative', // For absolute positioning of triggers
       },
       '::selection': {
         'background': `${currentSettings.highlightColor} !important`,
         'color': 'black !important'
+      },
+      // INLINE AI STYLES FOR EPUB
+      '.ai-trigger': {
+          'position': 'absolute',
+          'right': '-24px',
+          'top': '0',
+          'opacity': '0',
+          'cursor': 'pointer',
+          'transition': 'opacity 0.2s, transform 0.2s',
+          'font-size': '16px',
+          'line-height': '1',
+          'z-index': '10',
+          'padding': '4px',
+          'border-radius': '4px',
+      },
+      'p:hover .ai-trigger': {
+          'opacity': '1',
+      },
+      '.ai-trigger:hover': {
+          'transform': 'scale(1.2)',
+          'background': 'rgba(255, 193, 7, 0.2)', // Amber-200
+      },
+      // Container for React Portal
+      '.inline-ai-portal-mount': {
+          'margin': '24px 0',
+          'clear': 'both',
+          'position': 'relative',
+          'z-index': '20'
       }
     };
 
@@ -371,6 +485,55 @@ const Reader: React.FC<ReaderProps> = ({ book, settings, onSelection, onSettings
       setMenu(prev => ({ ...prev, visible: false }));
   };
   
+  const handleInlineFromSelection = () => {
+      // If Popup mode is enabled, trigger generic popup with selection text
+      if (settings.aiDisplayMode === 'popup') {
+          openInlinePanel(menu.text, menu.cfiRange || 'txt-selection');
+          setMenu(prev => ({ ...prev, visible: false }));
+          clearSelection();
+          return;
+      }
+
+      // For EPUB Inline from Selection (Plan A)
+      if (menu.cfiRange) {
+         // We need to find the DOM element
+         if (renditionRef.current) {
+             // Use a heuristic to find the node. 
+             // We can insert after the "commonAncestorContainer" of the range
+             try {
+                // @ts-ignore
+                const range = renditionRef.current.getRange(menu.cfiRange);
+                if (range) {
+                    const block = range.commonAncestorContainer.nodeType === 1 
+                        ? range.commonAncestorContainer as HTMLElement 
+                        : range.commonAncestorContainer.parentElement;
+                    
+                    if (block) {
+                        // Create container
+                        const container = block.ownerDocument.createElement('div');
+                        container.className = 'inline-ai-portal-mount';
+                        
+                        if (block.nextSibling) {
+                            block.parentNode?.insertBefore(container, block.nextSibling);
+                        } else {
+                            block.parentNode?.appendChild(container);
+                        }
+                        
+                        openInlinePanel(menu.text, menu.cfiRange, container);
+                        setMenu(prev => ({ ...prev, visible: false }));
+                        clearSelection();
+                    }
+                }
+             } catch (e) {
+                 console.error("Failed to find range for inline", e);
+             }
+         }
+      } else {
+          // TXT mode handles this differently via state
+          handleAskAI(); // Fallback for now if not triggered via sparkly icon
+      }
+  };
+  
   const handleCopy = () => {
       navigator.clipboard.writeText(menu.text);
       setMenu(prev => ({ ...prev, visible: false }));
@@ -595,6 +758,7 @@ const Reader: React.FC<ReaderProps> = ({ book, settings, onSelection, onSettings
     setError(null);
     setMenu(prev => ({ ...prev, visible: false }));
     setIsGeneratingLocations(false);
+    setInlineNotes([]); // Clear inline notes on book change/reload
 
     let mounted = true;
 
@@ -609,7 +773,7 @@ const Reader: React.FC<ReaderProps> = ({ book, settings, onSelection, onSettings
         height: '100%',
         flow: flowMode,
         manager: flowMode === 'scrolled' ? 'continuous' : 'default',
-        allowScriptedContent: false
+        allowScriptedContent: true // Allow scripts so we can inject listeners
       });
 
       renditionRef.current = rendition;
@@ -623,17 +787,53 @@ const Reader: React.FC<ReaderProps> = ({ book, settings, onSelection, onSettings
               head.appendChild(style);
           }
           
+          // INJECT SPARKLE BUTTONS ON PARAGRAPHS
+          const paragraphs = doc.querySelectorAll('p');
+          paragraphs.forEach((p: HTMLElement) => {
+              // Avoid re-injecting
+              if (p.querySelector('.ai-trigger')) return;
+
+              const trigger = doc.createElement('span');
+              trigger.innerHTML = '✨'; // Sparkles icon
+              trigger.className = 'ai-trigger';
+              trigger.title = 'Explain this paragraph';
+              trigger.onclick = (e: MouseEvent) => {
+                  e.stopPropagation();
+                  e.preventDefault();
+                  
+                  // Plan B Check
+                  // We can't access `settings.aiDisplayMode` directly in this closure reliably if it's stale, 
+                  // but we passed settings in dep array so it should be fine.
+                  
+                  // If Inline (Plan A):
+                  // Check if already expanded
+                  if (p.nextSibling && (p.nextSibling as HTMLElement).classList?.contains('inline-ai-portal-mount')) {
+                      return; // Already open
+                  }
+
+                  if (settings.aiDisplayMode === 'popup') {
+                       // Trigger global popup
+                       openInlinePanel(p.innerText, `p-${Date.now()}`);
+                  } else {
+                       // Trigger Inline Portal
+                       const container = doc.createElement('div');
+                       container.className = 'inline-ai-portal-mount';
+                       p.insertAdjacentElement('afterend', container);
+                       openInlinePanel(p.innerText, `p-${Date.now()}`, container);
+                  }
+              };
+              
+              p.appendChild(trigger);
+          });
+
           // Ruler Mouse Event Listener inside iframe
-          // Fix: Handle offset for scrolling iframes by calculating rect.top + clientY
           doc.addEventListener('mousemove', (e: MouseEvent) => {
              const iframe = doc.defaultView?.frameElement as HTMLElement;
              if (iframe && rulerRef.current) {
                  const rect = iframe.getBoundingClientRect();
-                 // Adjust Y by iframe's position relative to viewport
                  const screenY = rect.top + e.clientY;
                  rulerRef.current.style.top = `${screenY - 16}px`;
              } else if (rulerRef.current) {
-                 // Fallback if frameElement is inaccessible (e.g. rare cross-origin cases, though blobs usually same-origin)
                  rulerRef.current.style.top = `${e.clientY - 16}px`;
              }
           });
@@ -737,6 +937,10 @@ const Reader: React.FC<ReaderProps> = ({ book, settings, onSelection, onSettings
             setMenu(prev => ({ ...prev, visible: false }));
             setCurrentCfi(location.start.cfi);
             
+            // Cleanup active portals that might be off-screen/destroyed
+            // Actually, keep them in state, but DOM nodes might be gone.
+            // setInlineNotes([]); // Optional: Clear inline AI on page turn? Maybe better to keep if scrolled.
+            
             if (epubBook.locations.length() > 0) {
                  const percentage = epubBook.locations.percentageFromCfi(location.start.cfi);
                  setProgress(percentage);
@@ -770,7 +974,7 @@ const Reader: React.FC<ReaderProps> = ({ book, settings, onSelection, onSettings
         renditionRef.current = null;
       }
     };
-  }, [book?.id, settings.flow]); 
+  }, [book?.id, settings.flow, settings.aiDisplayMode]); // Re-render if AI mode changes to update listeners
 
   useEffect(() => {
     if (book?.type === 'epub' && renditionRef.current) {
@@ -818,27 +1022,67 @@ const Reader: React.FC<ReaderProps> = ({ book, settings, onSelection, onSettings
              textAlign: settings.align === 'justify' ? 'justify' : settings.align === 'left' ? 'left' : 'start'
           }}
         >
-          {(book.content as string).split('\n').map((para, idx) => (
-             <p 
-                key={idx} 
-                style={{ marginBottom: `${settings.paragraphSpacing}px` }}
-                className="transition-opacity duration-300 ease-in-out hover:!opacity-100"
-             >
-                 {para}
-             </p>
-          ))}
+          {(book.content as string).split('\n').map((para, idx) => {
+             const inlineNote = inlineNotes.find(n => n.id === `txt-${idx}`);
+             
+             return (
+                 <div key={idx} className="relative group/line">
+                     <p 
+                        style={{ marginBottom: `${settings.paragraphSpacing}px` }}
+                        className="transition-opacity duration-300 ease-in-out hover:!opacity-100 pr-8"
+                     >
+                         {para}
+                         {/* TXT Hover Trigger */}
+                         {para.trim().length > 0 && (
+                             <button
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    if (inlineNote) return; // Already open (if inline)
+                                    openInlinePanel(para, `txt-${idx}`);
+                                }}
+                                className="absolute right-0 top-0 opacity-0 group-hover/line:opacity-100 text-amber-500 hover:text-amber-600 hover:bg-amber-100 p-1 rounded transition-all transform hover:scale-110"
+                                title="Explain this paragraph"
+                             >
+                                 <Sparkles size={16} />
+                             </button>
+                         )}
+                     </p>
+                     
+                     {/* Inline Expansion Panel (Accordion) - Only if NOT popup mode */}
+                     {inlineNote && settings.aiDisplayMode === 'inline' && (
+                         <div className="mb-6 pl-4">
+                             <InlineAiPanel 
+                                content={inlineNote.aiResponse}
+                                isLoading={inlineNote.isLoading}
+                                onClose={() => removeInlineNote(inlineNote.id)}
+                                onSend={(prompt) => handleAiSubmit(inlineNote, prompt)}
+                             />
+                         </div>
+                     )}
+                 </div>
+             );
+          })}
         </div>
+        
+        {/* Floating AI Card for Plan B */}
+        {activePopupNote && (
+            <FloatingAiCard 
+                contextText={activePopupNote.textContext}
+                aiResponse={activePopupNote.aiResponse}
+                isLoading={activePopupNote.isLoading}
+                onClose={closePopupNote}
+                onSend={(prompt) => handleAiSubmit(activePopupNote, prompt)}
+            />
+        )}
         
         <style>{`
             ::selection {
                 background: ${settings.highlightColor} !important;
                 color: black !important;
             }
-            /* Focus Mode for TXT */
             .focus-mode-active:hover p {
                 opacity: 0.3;
             }
-            /* Explicitly ensure hovered paragraph is opaque */
             .focus-mode-active:hover p:hover {
                 opacity: 1 !important;
             }
@@ -892,6 +1136,32 @@ const Reader: React.FC<ReaderProps> = ({ book, settings, onSelection, onSettings
   return (
     <div className="flex-1 flex flex-col h-full w-full relative overflow-hidden transition-colors duration-300" style={{ backgroundColor: colors.bg }}>
       
+      {/* React Portals for EPUB Inline AI (Plan A) */}
+      {settings.aiDisplayMode === 'inline' && inlineNotes.map(note => 
+          note.domNode 
+          ? ReactDOM.createPortal(
+              <InlineAiPanel 
+                  content={note.aiResponse}
+                  isLoading={note.isLoading}
+                  onClose={() => removeInlineNote(note.id)}
+                  onSend={(prompt) => handleAiSubmit(note, prompt)}
+              />,
+              note.domNode
+          ) 
+          : null
+      )}
+
+      {/* Floating AI Card (Plan B) */}
+      {activePopupNote && (
+          <FloatingAiCard 
+              contextText={activePopupNote.textContext}
+              aiResponse={activePopupNote.aiResponse}
+              isLoading={activePopupNote.isLoading}
+              onClose={closePopupNote}
+              onSend={(prompt) => handleAiSubmit(activePopupNote, prompt)}
+          />
+      )}
+
       {/* Reading Ruler Overlay */}
       {settings.enableReadingRuler && (
           <div 
@@ -1013,14 +1283,25 @@ const Reader: React.FC<ReaderProps> = ({ book, settings, onSelection, onSettings
             >
                 <Copy size={16} />
             </button>
+            
+            {/* INLINE/POPUP AI BUTTON FOR EPUB SELECTION MENU */}
             <div className="w-px h-4 bg-slate-600 mx-0.5"></div>
             <button 
-                onClick={handleAskAI}
+                onClick={handleInlineFromSelection}
                 className="px-2 py-1.5 hover:bg-slate-700 rounded flex items-center gap-1.5 transition-colors bg-gradient-to-r from-amber-500/10 to-transparent border border-white/5" 
-                title="Ask AI about this"
+                title="AI Analysis"
             >
                 <Sparkles size={16} className="text-amber-400" />
-                <span className="text-xs font-bold text-slate-100">Ask AI</span>
+                <span className="text-xs font-bold text-slate-100">AI</span>
+            </button>
+
+            <button 
+                onClick={handleAskAI}
+                className="px-2 py-1.5 hover:bg-slate-700 rounded flex items-center gap-1.5 transition-colors text-slate-300" 
+                title="Ask in Chat Sidebar"
+            >
+                <MessageSquare size={16} />
+                <span className="text-xs">Chat</span>
             </button>
           </div>
       )}

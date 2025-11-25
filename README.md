@@ -1,20 +1,126 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
+# 🌸 Floral Reading (Lumina Reader)
 
-# Run and deploy your AI Studio app
+**Floral Reading** 是一款基于 React 和 Google Gemini AI 构建的下一代双端（Web/Desktop）电子书阅读器。它不仅支持 EPUB/TXT/PDF 格式的流畅阅读，更通过名为 "Lumina" 的 AI 助手，为读者提供深度文本分析、翻译和摘要功能。
 
-This contains everything you need to run your app locally.
+项目设计注重美学与交互体验，提供 **Plan A (嵌入式)** 和 **Plan B (沉浸式悬浮窗)** 两种 AI 交互模式，完美适配沉浸式阅读需求。
 
-View your app in AI Studio: https://ai.studio/apps/drive/16j6akW0gKvU759bQq6RECnVfrFVsZEtI
+![License](https://img.shields.io/badge/license-MIT-blue.svg)
+![React](https://img.shields.io/badge/React-19.0-61dafb.svg)
+![TypeScript](https://img.shields.io/badge/TypeScript-5.0-blue.svg)
+![Gemini](https://img.shields.io/badge/AI-Google%20Gemini-8e75b2.svg)
 
-## Run Locally
+## ✨ 核心特性
 
-**Prerequisites:**  Node.js
+### 📚 强大的阅读引擎
+*   **多格式支持**: 完美支持 `.epub` (基于 epub.js), `.txt` (智能分段), 以及 `.pdf` (基础预览)。
+*   **高度可定制**:
+    *   3 种主题: 明亮 (Light), 护眼 (Sepia), 深色 (Dark/Night)。
+    *   排版控制: 字体大小、行高、字间距、段间距、页边距自由调节。
+    *   布局模式: 支持 **分页 (Paginated)** 和 **滚屏 (Scrolled)** 阅读。
+    *   字体切换: 内置衬线体 (Serif/宋体), 无衬线体 (Sans/黑体), 楷体。
+*   **专注工具**:
+    *   **聚光灯模式 (Focus Mode)**: 高亮当前段落，淡化周围文字。
+    *   **阅读尺 (Reading Ruler)**: 跟随鼠标的辅助阅读线，帮助集中注意力。
 
+### 🤖 深度 AI 集成 (Lumina)
+集成 Google Gemini API (推荐 `gemini-2.5-flash` 或 `gemini-3-pro`)，支持 **Markdown 渲染** (代码块、列表、加粗)。
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+#### 交互模式 (可在设置中切换)
+1.  **Plan A: 嵌入式 (Inline Mode)**
+    *   AI 回答直接在段落下方展开，如同书籍原本的注释，不打断阅读流。
+    *   适合：逐段解析、翻译、生词注解。
+
+2.  **Plan B: 沉浸式悬浮窗 (Popup Mode)** ✨ *新功能*
+    *   采用类 Apple Books/Notion 的 "玻璃拟态" 悬浮卡片。
+    *   卡片悬浮于底部，支持拖拽（视觉效果），提供极简的输入和快捷指令。
+    *   适合：复杂对话、全文总结、开放式问答。
+
+### 🛠 辅助功能
+*   **全文检索**: 极速搜索书内关键词，支持上下文预览和跳转。
+*   **高亮与笔记**: 支持多种颜色的高亮、下划线，并可添加私人笔记。
+*   **书签系统**: 自动记录阅读进度和书签。
+*   **离线优先**: 书籍数据和阅读进度存储在本地浏览器数据库中 (IndexedDB/LocalStorage)。
+
+---
+
+## 🚀 快速开始
+
+### 环境要求
+*   Node.js 18+
+*   Google Gemini API Key ([获取地址](https://aistudio.google.com/))
+
+### 安装与运行
+
+1.  **克隆项目**
+    ```bash
+    git clone https://github.com/your-username/floral-reading.git
+    cd floral-reading
+    ```
+
+2.  **安装依赖**
+    ```bash
+    npm install
+    # 或者
+    yarn install
+    ```
+
+3.  **启动开发服务器**
+    ```bash
+    npm run dev
+    ```
+
+4.  **配置 API Key**
+    *   启动应用后，点击左下角的 **设置 (Settings)** 图标。
+    *   切换到 **AI 设置** 标签页。
+    *   输入您的 Google Gemini API Key 并保存。
+
+---
+
+## 📖 使用指南
+
+### 切换 AI 模式 (Plan A vs Plan B)
+1.  打开 **设置** -> **AI 设置**。
+2.  在 "AI 交互模式" 中选择：
+    *   **Plan A (嵌入式)**: 点击段落旁的 ✨ 图标，AI 解析面板将插入到段落之间。
+    *   **Plan B (悬浮窗)**: 点击 ✨ 图标或选中文字点击 "AI"，将唤起底部半透明悬浮卡片。
+
+### 打包为桌面应用 (Exe/App)
+本项目是纯前端架构，可以使用 **Electron** 或 **Tauri** 轻松打包为桌面应用。
+
+**使用 Electron (推荐):**
+1.  安装 Electron: `npm install --save-dev electron`
+2.  创建 `main.js` 入口文件。
+3.  修改 `package.json` 添加 `"main": "main.js"` 和 build 脚本。
+4.  运行 `npm run electron:build` (需配置 electron-builder)。
+
+---
+
+## 🛠 技术栈
+
+*   **UI 框架**: React 19
+*   **语言**: TypeScript
+*   **样式**: Tailwind CSS (配合 `@tailwindcss/typography` 插件渲染 Markdown)
+*   **图标库**: Lucide React
+*   **电子书引擎**: epubjs
+*   **AI SDK**: @google/genai
+*   **Markdown 解析**: marked
+*   **构建工具**: Vite (推荐)
+
+---
+
+## 📝 待办事项 (Roadmap)
+
+- [x] 基础 EPUB/TXT 阅读器
+- [x] AI 嵌入式对话 (Plan A)
+- [x] AI 悬浮窗对话 (Plan B)
+- [x] Markdown 渲染支持
+- [x] 全文搜索与高亮
+- [ ] PDF 深度解析支持 (目前仅为预览)
+- [ ] 多端数据同步 (WebDAV/Google Drive)
+- [ ] TTS 语音朗读 (集成 Gemini 语音能力)
+
+---
+
+## 📄 开源协议
+
+MIT License. Designed with ❤️ by Frontend Developer.

@@ -2,6 +2,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Send, X, Sparkles, BrainCircuit, BookOpen, Loader2, Quote, Trash2, MessageSquare } from 'lucide-react';
 import { ChatMessage, Book } from '../types';
+import { marked } from 'marked';
 
 interface ChatInterfaceProps {
   messages: ChatMessage[];
@@ -147,12 +148,19 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     : 'bg-white text-slate-700 border border-slate-100 rounded-bl-none'
               }`}
             >
-              {msg.text.split('\n').map((line, i) => (
-                  <React.Fragment key={i}>
-                      {line}
-                      {i < msg.text.split('\n').length - 1 && <br />}
-                  </React.Fragment>
-              ))}
+              {msg.role === 'user' ? (
+                // User messages are typically short, keep them as is or simple markdown
+                 <div 
+                    className="prose prose-sm prose-invert max-w-none prose-p:my-0 prose-p:leading-relaxed"
+                    dangerouslySetInnerHTML={{ __html: marked.parse(msg.text) as string }} 
+                 />
+              ) : (
+                // Model messages need rich markdown support
+                <div 
+                    className="prose prose-sm prose-slate max-w-none prose-p:my-1 prose-p:leading-relaxed prose-pre:bg-slate-100 prose-pre:text-slate-700"
+                    dangerouslySetInnerHTML={{ __html: marked.parse(msg.text) as string }} 
+                />
+              )}
             </div>
           </div>
         ))}

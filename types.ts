@@ -50,6 +50,7 @@ export interface ReaderSettings {
   // AI
   customAiPrompt?: string;  // User defined system instruction override
   aiModel: string;          // Selected Gemini Model ID
+  aiDisplayMode: 'inline' | 'popup'; // Plan A (Inline) vs Plan B (Popup)
 }
 
 export interface ChatMessage {
@@ -101,4 +102,13 @@ export interface BookUserData {
   bookmarks: BookmarkData[];
   annotations: Annotation[];
   lastRead: number;
+}
+
+export interface ActiveInlineNote {
+    id: string;      // Unique ID for the note block
+    cfi?: string;    // If EPUB
+    textContext: string; // The paragraph text
+    aiResponse: string;  // Streamed content
+    isLoading: boolean;
+    domNode?: HTMLElement; // The container element in the DOM (for EPUB portal)
 }

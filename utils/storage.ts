@@ -68,7 +68,8 @@ const DEFAULT_SETTINGS: ReaderSettings = {
     
     highlightColor: '#fde047', // yellow
     customAiPrompt: '',
-    aiModel: 'gemini-2.5-flash'
+    aiModel: 'gemini-2.5-flash',
+    aiDisplayMode: 'inline' // Default to Plan A
 };
 
 export const saveGlobalSettings = (settings: ReaderSettings) => {
